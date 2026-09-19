@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>termcp gui · 产品原型</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="workspace.js" defer></script>
+  <script src="inspector.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="prototype-bar">
+    <a class="prototype-brand" href="#"><span class="brand-mark">t_</span><span>termcp <b>gui</b></span><span class="edition">DESIGN EXPLORATION / 02</span></a>
+    <nav aria-label="产品原型方案" class="concept-switch">
+      <button data-concept="control" aria-pressed="true"><span>01</span> 控制中心</button>
+      <button data-concept="studio" aria-pressed="false"><span>02</span> SSH 工作台</button>
+      <button data-concept="explorer" aria-pressed="false"><span>03</span> 资源管理器</button>
+    </nav>
+    <button class="quiet" data-action="design">设计说明 ↗</button>
+  </header>
+  <section class="concept-intro" aria-live="polite" id="concept-intro"></section>
+  <div class="app-window" id="app"></div>
+  <footer class="prototype-footer"><span><span class="dot amber"></span> 交互原型 · 全部为演示数据，操作不连接真实 core</span><button class="quiet" data-action="reset">重置演示</button><span>CORE FIRST. TERMINAL ALWAYS.</span></footer>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <dialog id="dialog"><div id="dialog-body"></div></dialog>
+</body>
+</html>
