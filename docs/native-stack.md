@@ -12,7 +12,7 @@ Wails 不打包 Electron 或 Chromium。它把前端资源和 Go 代码编译进
 | --- | --- |
 | 与 termcp 集成 | GUI 模块位于 `github.com/open-mcp-ai/termcp/gui`，可以直接复用 termcp 的 Go 内部组件 |
 | 单一程序 | Core 在 Wails 进程内启动，前端资源随应用打包 |
-| 兼容独立 Core | 端口已有服务时切换到外部接入模式，不接管其生命周期 |
+| 本机独立 Core | 注册系统服务后附着 `127.0.0.1:18765`，GUI 退出不影响服务生命周期 |
 | 替换 WebUI | 保留 REST / WebSocket 协议，桌面 UI 可以按纵向功能逐步迁移 |
 | 避开 Electron | 使用 macOS WebKit、Windows WebView2 和 Linux WebKitGTK 等系统渲染引擎 |
 

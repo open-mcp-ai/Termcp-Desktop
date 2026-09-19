@@ -2,15 +2,88 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"os"
 	"testing"
 
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
 )
+
+func TestArgumentValue(t *testing.T) {
+	previous := os.Args
+	os.Args = []string{"termcp-gui", "--system-service-action", "install", "--autostart"}
+	t.Cleanup(func() { os.Args = previous })
+	if value, ok := argumentValue("--system-service-action"); !ok || value != "install" {
+		t.Fatalf("argument value = %q, %v", value, ok)
+	}
+	if _, ok := argumentValue("--autostart"); ok {
+		t.Fatal("flag without a value was treated as a value argument")
+	}
+}
+
+func TestAPIProxiesTextJSONAndBinary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/sessions":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[]}`))
+		case "/api/example":
+			if r.Method != http.MethodPatch {
+				t.Fatalf("method = %s", r.Method)
+			}
+			body, _ := io.ReadAll(r.Body)
+			if string(body) != `{"name":"updated"}` {
+				t.Fatalf("body = %q", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/api/image":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte{0x89, 'P', 'N', 'G'})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	service := serviceForURL(t, server.URL)
+	if err := service.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Stop() })
+	app := newApp(service)
+
+	jsonResponse, err := app.API(APIRequest{Method: "PATCH", Path: "/api/example", Body: `{"name":"updated"}`, ContentType: "application/json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jsonResponse.Body != `{"ok":true}` || jsonResponse.Status != http.StatusOK {
+		t.Fatalf("unexpected JSON response: %+v", jsonResponse)
+	}
+	binaryResponse, err := app.API(APIRequest{Method: "GET", Path: "/api/image"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binaryResponse.Base64 != "iVBORw==" || binaryResponse.Body != "" {
+		t.Fatalf("unexpected binary response: %+v", binaryResponse)
+	}
+}
+
+func TestAPIRejectsRequestsOutsideCoreAPI(t *testing.T) {
+	app := NewApp()
+	for _, candidate := range []string{"https://example.test/api/sessions", "/stream", "api/sessions"} {
+		if _, err := app.API(APIRequest{Method: "GET", Path: candidate}); err == nil {
+			t.Fatalf("API accepted %q", candidate)
+		}
+	}
+	if _, err := app.API(APIRequest{Method: "TRACE", Path: "/api/sessions"}); err == nil {
+		t.Fatal("API accepted TRACE")
+	}
+}
 
 func TestGetSnapshotAggregatesCoreResources(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

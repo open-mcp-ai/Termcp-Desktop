@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"log"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -14,6 +15,23 @@ import (
 var assets embed.FS
 
 func main() {
+	if action, ok := argumentValue("--system-service-action"); ok {
+		if err := runSystemServiceAction(action); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if hasArgument("--core-service") {
+		if dataDir, ok := argumentValue("--core-data-dir"); ok {
+			if err := os.Setenv("TERMCP_DATA_DIR", dataDir); err != nil {
+				log.Fatal(err)
+			}
+		}
+		if err := runCoreService(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	app := NewApp()
 	err := wails.Run(&options.App{
 		Title:            "termcp gui",
@@ -37,4 +55,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func argumentValue(name string) (string, bool) {
+	for index, argument := range os.Args[1:] {
+		if argument == name && index+2 <= len(os.Args[1:]) {
+			return os.Args[index+2], true
+		}
+	}
+	return "", false
+}
+
+func hasArgument(expected string) bool {
+	for _, argument := range os.Args[1:] {
+		if argument == expected {
+			return true
+		}
+	}
+	return false
 }

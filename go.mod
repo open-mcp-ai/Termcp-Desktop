@@ -6,6 +6,7 @@ require (
 	github.com/mark3labs/mcp-go v0.50.0
 	github.com/open-mcp-ai/termcp v0.0.0
 	github.com/wailsapp/wails/v2 v2.15.0
+	golang.org/x/sys v0.46.0
 )
 
 require (
@@ -48,7 +49,6 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 )
 

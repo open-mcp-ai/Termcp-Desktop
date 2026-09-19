@@ -9,17 +9,23 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
+	"github.com/open-mcp-ai/termcp/gui/internal/systemservice"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
-	ctx    context.Context
-	core   *corepkg.Service
-	client *http.Client
+	ctx       context.Context
+	core      *corepkg.Service
+	client    *http.Client
+	transfer  *http.Client
+	service   systemservice.Manager
+	lifecycle sync.Mutex
 }
 
 type CoreStatus struct {
@@ -28,6 +34,21 @@ type CoreStatus struct {
 	Address string `json:"address"`
 	State   string `json:"state"`
 	Error   string `json:"error,omitempty"`
+}
+
+type ServiceStatus struct {
+	Supported   bool       `json:"supported"`
+	Platform    string     `json:"platform"`
+	Installed   bool       `json:"installed"`
+	Running     bool       `json:"running"`
+	Autostart   bool       `json:"autostart"`
+	PID         int        `json:"pid,omitempty"`
+	Label       string     `json:"label"`
+	Definition  string     `json:"definition,omitempty"`
+	LogPath     string     `json:"log_path,omitempty"`
+	Executable  string     `json:"executable,omitempty"`
+	Description string     `json:"description,omitempty"`
+	Core        CoreStatus `json:"core"`
 }
 
 type Connection struct {
@@ -69,13 +90,14 @@ type HistoryEntry struct {
 }
 
 type Forward struct {
-	ID         string `json:"id"`
-	SessionID  string `json:"session_id"`
-	Direction  string `json:"direction"`
-	LocalHost  string `json:"local_host"`
-	LocalPort  int    `json:"local_port"`
-	RemoteHost string `json:"remote_host"`
-	RemotePort int    `json:"remote_port"`
+	ForwardID string `json:"forward_id"`
+	SessionID string `json:"session_id"`
+	Direction string `json:"direction"`
+	SSHConfig string `json:"ssh_config"`
+	Listen    string `json:"listen_addr"`
+	Target    string `json:"target_addr"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
 }
 
 type Snapshot struct {
@@ -98,12 +120,37 @@ func NewApp() *App {
 }
 
 func newApp(core *corepkg.Service) *App {
-	return &App{core: core, client: &http.Client{Timeout: 4 * time.Second}}
+	executable, _ := os.Executable()
+	return newAppWithService(core, systemservice.New(executable))
+}
+
+func newAppWithService(core *corepkg.Service, service systemservice.Manager) *App {
+	return &App{
+		core:     core,
+		client:   &http.Client{Timeout: 30 * time.Second},
+		transfer: &http.Client{},
+		service:  service,
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	if err := a.core.Start(); err != nil {
+	status, statusErr := a.service.Status()
+	if statusErr != nil {
+		runtime.LogErrorf(ctx, "读取 Core 系统服务状态失败: %v", statusErr)
+	}
+	var err error
+	if status.Installed {
+		if status.Autostart && !status.Running {
+			err = a.service.Start()
+		}
+		if err == nil && (status.Running || status.Autostart) {
+			err = a.core.Attach(12 * time.Second)
+		}
+	} else {
+		err = a.core.Start()
+	}
+	if err != nil {
 		runtime.LogErrorf(ctx, "Core 启动失败: %v", err)
 	}
 }
@@ -121,6 +168,16 @@ func (a *App) WindowClose()          { runtime.Quit(a.ctx) }
 func (a *App) CoreStatus() CoreStatus {
 	s := a.core.Status()
 	return CoreStatus{Running: s.Running, Managed: s.Managed, Address: s.Address, State: s.State, Error: s.Error}
+}
+
+func (a *App) GetServiceStatus() (ServiceStatus, error) {
+	status, err := a.service.Status()
+	return ServiceStatus{
+		Supported: status.Supported, Platform: status.Platform, Installed: status.Installed,
+		Running: status.Running, Autostart: status.Autostart, PID: status.PID, Label: status.Label,
+		Definition: status.Definition, LogPath: status.LogPath, Executable: status.Executable,
+		Description: status.Description, Core: a.CoreStatus(),
+	}, err
 }
 
 func (a *App) GetSnapshot() (Snapshot, error) {
@@ -192,13 +249,90 @@ func (a *App) TerminateSession(sessionID string) error {
 }
 
 func (a *App) RestartCore() error {
-	if !a.core.Status().Managed {
-		return errors.New("当前连接的是外部 Core，不能由 GUI 重启")
+	return a.RestartLocalCore()
+}
+
+func (a *App) InstallCoreService(autostart bool) error {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	if err := a.core.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	if err := a.service.Install(autostart); err != nil {
+		_ = a.core.Start()
+		return err
+	}
+	if err := a.service.Start(); err != nil {
+		return err
+	}
+	return a.core.Attach(15 * time.Second)
+}
+
+func (a *App) UninstallCoreService() error {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	_ = a.core.Stop()
+	if err := a.service.Uninstall(); err != nil {
+		return err
+	}
+	return a.core.Start()
+}
+
+func (a *App) StartLocalCore() error {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	status, err := a.service.Status()
+	if err != nil {
+		return err
+	}
+	if !status.Installed {
+		return a.core.Start()
+	}
+	if err := a.service.Start(); err != nil {
+		return err
+	}
+	return a.core.Attach(15 * time.Second)
+}
+
+func (a *App) StopLocalCore() error {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	status, err := a.service.Status()
+	if err != nil {
+		return err
 	}
 	if err := a.core.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	if status.Installed {
+		return a.service.Stop()
+	}
+	return nil
+}
+
+func (a *App) RestartLocalCore() error {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	status, err := a.service.Status()
+	if err != nil {
+		return err
+	}
+	if err := a.core.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	if status.Installed {
+		if err := a.service.Restart(); err != nil {
+			return err
+		}
+		return a.core.Attach(15 * time.Second)
+	}
 	return a.core.Start()
+}
+
+func (a *App) SetCoreAutostart(enabled bool) error {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	return a.service.SetAutostart(enabled)
 }
 
 func (a *App) getJSON(path string, target any) error {

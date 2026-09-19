@@ -138,6 +138,30 @@ func (s *Service) Start() error {
 	return err
 }
 
+// Attach waits for a Core that is owned by the operating system service manager.
+// It never starts an in-process Core when the endpoint is unavailable.
+func (s *Service) Attach(timeout time.Duration) error {
+	s.mu.Lock()
+	if s.running && !s.managed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.state, s.lastErr = "starting", ""
+	s.mu.Unlock()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if probe(s.BaseURL() + "/api/sessions") {
+			s.setReady(false, nil)
+			return nil
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
+	err := errors.New("等待 Core 系统服务启动超时")
+	s.setReady(false, err)
+	return err
+}
+
 func (s *Service) Stop() error {
 	s.mu.Lock()
 	if !s.running {
