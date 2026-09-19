@@ -1,8 +1,8 @@
-# termcp-gui 产品原型设计
+# Termcp-Desktop 产品原型设计
 
 ## 产品定位
 
-termcp-gui 是 termcp core 的独立图形客户端与本地服务管理端。人通过 GUI、Agent 通过 MCP、程序通过 REST 操作同一个 core 的持久会话。
+Termcp 是 termcp core 的独立图形客户端与本地服务管理端。人通过 GUI、Agent 通过 MCP、程序通过 REST 操作同一个 core 的持久会话。
 
 产品同时承担 Core 管理端与 SSH 管理工具的角色。默认体验：打开 SSH 工作台 → 连接收藏主机或进入已有会话 → 用标签、分屏和平铺组织 Shell → 管理焦点窗格所属会话的文件与转发。Core 管理始终可从侧栏进入。
 

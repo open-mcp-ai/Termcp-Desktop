@@ -11,12 +11,12 @@ import (
 )
 
 func TestRenderPlistProducesValidLaunchAgent(t *testing.T) {
-	data, err := renderPlist(`/Applications/termcp gui.app/Contents/MacOS/termcp-gui`, `/tmp/termcp & core.log`, true)
+	data, err := renderPlist(`/Applications/Termcp-Desktop.app/Contents/MacOS/Termcp`, `/tmp/termcp & core.log`, `/Users/example/.termcp`, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, expected := range []string{Label, "--core-service", "<true/>", "/Applications/termcp gui.app", "/tmp/termcp &amp; core.log"} {
+	for _, expected := range []string{Label, "--core-service", "--core-data-dir", "/Users/example/.termcp", "<true/>", "/Applications/Termcp-Desktop.app", "/tmp/termcp &amp; core.log"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("plist does not contain %q:\n%s", expected, text)
 		}

@@ -29,7 +29,7 @@ func (m *darwinManager) plistPath() string {
 	return filepath.Join(m.home, "Library", "LaunchAgents", Label+".plist")
 }
 func (m *darwinManager) logPath() string {
-	return filepath.Join(m.home, ".termcp", "logs", "termcp-gui-core.log")
+	return filepath.Join(m.home, ".termcp", "logs", "termcp-desktop-core.log")
 }
 func (m *darwinManager) domainTarget() string { return fmt.Sprintf("gui/%d/%s", m.uid, Label) }
 func (m *darwinManager) domain() string       { return fmt.Sprintf("gui/%d", m.uid) }
@@ -54,7 +54,7 @@ func (m *darwinManager) Status() (Status, error) {
 
 func (m *darwinManager) Install(autostart bool) error {
 	if strings.TrimSpace(m.executable) == "" {
-		return errors.New("无法确定 termcp-gui 可执行文件路径")
+		return errors.New("无法确定 Termcp 可执行文件路径")
 	}
 	if err := os.MkdirAll(filepath.Dir(m.plistPath()), 0o755); err != nil {
 		return err
@@ -62,7 +62,7 @@ func (m *darwinManager) Install(autostart bool) error {
 	if err := os.MkdirAll(filepath.Dir(m.logPath()), 0o700); err != nil {
 		return err
 	}
-	data, err := renderPlist(m.executable, m.logPath(), autostart)
+	data, err := renderPlist(m.executable, m.logPath(), filepath.Join(m.home, ".termcp"), autostart)
 	if err != nil {
 		return err
 	}
@@ -145,16 +145,16 @@ type plistDict struct {
 	Inner string `xml:",innerxml"`
 }
 
-func renderPlist(executable, logPath string, autostart bool) ([]byte, error) {
+func renderPlist(executable, logPath, dataDir string, autostart bool) ([]byte, error) {
 	inner := strings.Join([]string{
 		"<key>Label</key><string>" + xmlEscape(Label) + "</string>",
-		"<key>ProgramArguments</key><array><string>" + xmlEscape(executable) + "</string><string>--core-service</string></array>",
+		"<key>ProgramArguments</key><array><string>" + xmlEscape(executable) + "</string><string>--core-service</string><string>--core-data-dir</string><string>" + xmlEscape(dataDir) + "</string></array>",
 		"<key>RunAtLoad</key><" + strconv.FormatBool(autostart) + "/>",
 		"<key>KeepAlive</key><false/>",
 		"<key>ProcessType</key><string>Background</string>",
 		"<key>StandardOutPath</key><string>" + xmlEscape(logPath) + "</string>",
 		"<key>StandardErrorPath</key><string>" + xmlEscape(logPath) + "</string>",
-		"<key>EnvironmentVariables</key><dict><key>TERMCP_GUI_SERVICE</key><string>1</string></dict>",
+		"<key>EnvironmentVariables</key><dict><key>TERMCP_DESKTOP_SERVICE</key><string>1</string></dict>",
 	}, "")
 	document := plistDocument{Version: "1.0", Dict: plistDict{Inner: inner}}
 	data, err := xml.MarshalIndent(document, "", "  ")

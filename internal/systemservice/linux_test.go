@@ -8,11 +8,11 @@ import (
 )
 
 func TestRenderSystemdUnit(t *testing.T) {
-	unit := renderSystemdUnit(`/opt/termcp gui/termcp-gui`)
+	unit := renderSystemdUnit(`/opt/Termcp-Desktop/Termcp`, `/home/example/.termcp`)
 	for _, expected := range []string{
-		`ExecStart="/opt/termcp gui/termcp-gui" --core-service`,
+		`ExecStart="/opt/Termcp-Desktop/Termcp" --core-service --core-data-dir "/home/example/.termcp"`,
 		"Restart=on-failure",
-		"Environment=TERMCP_GUI_SERVICE=1",
+		"Environment=TERMCP_DESKTOP_SERVICE=1",
 		"WantedBy=default.target",
 	} {
 		if !strings.Contains(unit, expected) {

@@ -4,7 +4,7 @@
 
 | 检查 | 结果 |
 | --- | --- |
-| 前端检查与生产构建 | `node --check` 和 Vite build 通过；xterm 静态资源随应用打包 |
+| 前端检查与生产构建 | `node --check` 和 Vite build 通过；中英文逐页切换通过；xterm 静态资源随应用打包 |
 | Core 生命周期 | 随机端口启动进程内 Core；附着本机服务时不误停服务进程；服务不可用时 Attach 不会创建第二个 Core |
 | 系统服务定义 | macOS plist 经 `plutil -lint`；Linux 与 Windows 后端执行交叉编译；应用绑定使用模拟服务校验状态和自启切换 |
 | 完整资源生命周期 | 连接保存/测试/删除，会话与 Shell，输出分页，重命名、结束和永久删除通过 |
@@ -15,7 +15,8 @@
 | 工作台交互 | 双终端平铺、左右/上下布局、比例滑块、窗格最大化和右侧工具切换通过 |
 | SSH 管理 | 新建/编辑 TOML、连接测试、删除和创建会话表单可访问 |
 | 浏览器日志 | error / warning 为空 |
-| 原生构建 | Wails v2 macOS arm64 打包和自签名通过 |
+| 原生构建 | Wails v2 macOS arm64 打包、自签名和 Bundle 元数据检查通过；Windows/Linux amd64 与 arm64 交叉编译通过 |
+| 系统托盘 | macOS AppKit 状态菜单已启动并展开验证；Windows/Linux 托盘代码交叉编译通过；中英文状态文案单元测试通过 |
 
 接口与测试映射见 [api-coverage.md](api-coverage.md)。
 

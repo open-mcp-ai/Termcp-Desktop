@@ -7,8 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
@@ -16,13 +17,27 @@ import (
 
 func TestArgumentValue(t *testing.T) {
 	previous := os.Args
-	os.Args = []string{"termcp-gui", "--system-service-action", "install", "--autostart"}
+	os.Args = []string{"Termcp", "--system-service-action", "install", "--autostart"}
 	t.Cleanup(func() { os.Args = previous })
 	if value, ok := argumentValue("--system-service-action"); !ok || value != "install" {
 		t.Fatalf("argument value = %q, %v", value, ok)
 	}
 	if _, ok := argumentValue("--autostart"); ok {
 		t.Fatal("flag without a value was treated as a value argument")
+	}
+}
+
+func TestConfigureTermcpDataDirUsesHomeDirectory(t *testing.T) {
+	t.Setenv("TERMCP_DATA_DIR", t.TempDir())
+	if err := configureTermcpDataDir(""); err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := os.Getenv("TERMCP_DATA_DIR"), filepath.Join(home, ".termcp"); got != want {
+		t.Fatalf("TERMCP_DATA_DIR = %q, want %q", got, want)
 	}
 }
 

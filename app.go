@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,12 +21,16 @@ import (
 )
 
 type App struct {
-	ctx       context.Context
-	core      *corepkg.Service
-	client    *http.Client
-	transfer  *http.Client
-	service   systemservice.Manager
-	lifecycle sync.Mutex
+	ctx        context.Context
+	core       *corepkg.Service
+	client     *http.Client
+	transfer   *http.Client
+	service    systemservice.Manager
+	tray       *trayController
+	dataDir    string
+	lifecycle  sync.Mutex
+	language   sync.RWMutex
+	uiLanguage string
 }
 
 type CoreStatus struct {
@@ -48,6 +53,7 @@ type ServiceStatus struct {
 	LogPath     string     `json:"log_path,omitempty"`
 	Executable  string     `json:"executable,omitempty"`
 	Description string     `json:"description,omitempty"`
+	DataDir     string     `json:"data_dir"`
 	Core        CoreStatus `json:"core"`
 }
 
@@ -116,7 +122,9 @@ type CreateSessionRequest struct {
 }
 
 func NewApp() *App {
-	return newApp(corepkg.New("127.0.0.1", 18765))
+	app := newApp(corepkg.New("127.0.0.1", 18765))
+	app.tray = newTrayController(app)
+	return app
 }
 
 func newApp(core *corepkg.Service) *App {
@@ -125,11 +133,19 @@ func newApp(core *corepkg.Service) *App {
 }
 
 func newAppWithService(core *corepkg.Service, service systemservice.Manager) *App {
+	dataDir := strings.TrimSpace(os.Getenv("TERMCP_DATA_DIR"))
+	if dataDir == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			dataDir = filepath.Join(home, ".termcp")
+		}
+	}
 	return &App{
-		core:     core,
-		client:   &http.Client{Timeout: 30 * time.Second},
-		transfer: &http.Client{},
-		service:  service,
+		core:       core,
+		client:     &http.Client{Timeout: 30 * time.Second},
+		transfer:   &http.Client{},
+		service:    service,
+		dataDir:    dataDir,
+		uiLanguage: defaultUILanguage(),
 	}
 }
 
@@ -153,9 +169,17 @@ func (a *App) startup(ctx context.Context) {
 	if err != nil {
 		runtime.LogErrorf(ctx, "Core 启动失败: %v", err)
 	}
+	if a.tray != nil {
+		if err := a.tray.Start(); err != nil {
+			runtime.LogErrorf(ctx, "系统托盘启动失败: %v", err)
+		}
+	}
 }
 
 func (a *App) shutdown(context.Context) {
+	if a.tray != nil {
+		a.tray.Stop()
+	}
 	if err := a.core.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Printf("termcp core stop: %v\n", err)
 	}
@@ -163,7 +187,32 @@ func (a *App) shutdown(context.Context) {
 
 func (a *App) WindowMinimise()       { runtime.WindowMinimise(a.ctx) }
 func (a *App) WindowToggleMaximise() { runtime.WindowToggleMaximise(a.ctx) }
-func (a *App) WindowClose()          { runtime.Quit(a.ctx) }
+func (a *App) WindowClose()          { runtime.WindowHide(a.ctx) }
+
+func defaultUILanguage() string {
+	locale := strings.ToLower(os.Getenv("LANG"))
+	if strings.HasPrefix(locale, "zh") {
+		return "zh-CN"
+	}
+	return "en"
+}
+
+func (a *App) UILanguage() string {
+	a.language.RLock()
+	defer a.language.RUnlock()
+	return a.uiLanguage
+}
+
+func (a *App) SetUILanguage(language string) string {
+	if language != "en" {
+		language = "zh-CN"
+	}
+	a.language.Lock()
+	a.uiLanguage = language
+	a.language.Unlock()
+	a.refreshTray()
+	return language
+}
 
 func (a *App) CoreStatus() CoreStatus {
 	s := a.core.Status()
@@ -176,7 +225,7 @@ func (a *App) GetServiceStatus() (ServiceStatus, error) {
 		Supported: status.Supported, Platform: status.Platform, Installed: status.Installed,
 		Running: status.Running, Autostart: status.Autostart, PID: status.PID, Label: status.Label,
 		Definition: status.Definition, LogPath: status.LogPath, Executable: status.Executable,
-		Description: status.Description, Core: a.CoreStatus(),
+		Description: status.Description, DataDir: a.dataDir, Core: a.CoreStatus(),
 	}, err
 }
 
@@ -255,6 +304,7 @@ func (a *App) RestartCore() error {
 func (a *App) InstallCoreService(autostart bool) error {
 	a.lifecycle.Lock()
 	defer a.lifecycle.Unlock()
+	defer a.refreshTray()
 	if err := a.core.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -271,6 +321,7 @@ func (a *App) InstallCoreService(autostart bool) error {
 func (a *App) UninstallCoreService() error {
 	a.lifecycle.Lock()
 	defer a.lifecycle.Unlock()
+	defer a.refreshTray()
 	_ = a.core.Stop()
 	if err := a.service.Uninstall(); err != nil {
 		return err
@@ -281,6 +332,7 @@ func (a *App) UninstallCoreService() error {
 func (a *App) StartLocalCore() error {
 	a.lifecycle.Lock()
 	defer a.lifecycle.Unlock()
+	defer a.refreshTray()
 	status, err := a.service.Status()
 	if err != nil {
 		return err
@@ -297,6 +349,7 @@ func (a *App) StartLocalCore() error {
 func (a *App) StopLocalCore() error {
 	a.lifecycle.Lock()
 	defer a.lifecycle.Unlock()
+	defer a.refreshTray()
 	status, err := a.service.Status()
 	if err != nil {
 		return err
@@ -313,6 +366,7 @@ func (a *App) StopLocalCore() error {
 func (a *App) RestartLocalCore() error {
 	a.lifecycle.Lock()
 	defer a.lifecycle.Unlock()
+	defer a.refreshTray()
 	status, err := a.service.Status()
 	if err != nil {
 		return err
@@ -332,6 +386,7 @@ func (a *App) RestartLocalCore() error {
 func (a *App) SetCoreAutostart(enabled bool) error {
 	a.lifecycle.Lock()
 	defer a.lifecycle.Unlock()
+	defer a.refreshTray()
 	return a.service.SetAutostart(enabled)
 }
 

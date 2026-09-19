@@ -1,6 +1,9 @@
 package systemservice
 
-const Label = "ai.openmcp.termcp.gui.core"
+const (
+	Label              = "ai.openmcp.termcp.desktop.core"
+	WindowsServiceName = "termcp-desktop-core"
+)
 
 type Status struct {
 	Supported   bool   `json:"supported"`

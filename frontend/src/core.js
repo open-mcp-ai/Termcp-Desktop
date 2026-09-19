@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 const bridge = {
   available: () => Boolean(window.go?.main?.App),
   call(name, ...args) {
@@ -38,10 +40,11 @@ const demoService = {
   running: true,
   autostart: true,
   pid: 2841,
-  label: 'ai.openmcp.termcp.gui.core',
-  definition: '~/Library/LaunchAgents/ai.openmcp.termcp.gui.core.plist',
-  log_path: '~/.termcp/logs/termcp-gui-core.log',
-  executable: '/Applications/termcp-gui.app/Contents/MacOS/termcp-gui',
+  label: 'ai.openmcp.termcp.desktop.core',
+  definition: '~/Library/LaunchAgents/ai.openmcp.termcp.desktop.core.plist',
+  log_path: '~/.termcp/logs/termcp-desktop-core.log',
+  data_dir: '~/.termcp',
+  executable: '/Applications/Termcp-Desktop.app/Contents/MacOS/Termcp',
   description: 'macOS LaunchAgent',
 };
 
@@ -127,7 +130,7 @@ function demoAPI(method, rawPath, body) {
   if (parts[1] === 'forwards' && parts[2] && method === 'DELETE') { demo.forwards = demo.forwards.filter(f => f.id !== parts[2]); return response(''); }
   if (method === 'GET' && url.pathname === '/api/notifications') return response({ notifications: [{ id: 'notify-demo-01', session_id: 'session-demo-01', shell_id: 'shell-demo-01', event: 'process_exit', created_at: now }] });
   if (parts[1] === 'notifications' && method === 'DELETE') return response({ ok: true });
-  if (parts[1] === 'shells' && parts[3] === 'output-range') return response({ start: 0, end: 74, total: 74, d: btoa('termcp gui preview\r\n$ go test ./...\r\nok  termcp/gui\r\n$ ') });
+  if (parts[1] === 'shells' && parts[3] === 'output-range') return response({ start: 0, end: 74, total: 74, d: btoa('Termcp preview\r\n$ go test ./...\r\nok  termcp/gui\r\n$ ') });
   if (parts[1] === 'shells' && method === 'DELETE') return response('');
   return response({});
 }
@@ -162,7 +165,7 @@ export const core = {
     return bridge.call('ChooseAndUploadFile', sessionID, directory);
   },
   async save(path, filename) {
-    if (!bridge.available()) throw new Error('浏览器预览不执行本机下载');
+    if (!bridge.available()) throw new Error(t('浏览器预览不执行本机下载'));
     return bridge.call('SaveAPIResource', path, filename);
   },
   async installService(autostart = true) {
@@ -188,6 +191,10 @@ export const core = {
   async setAutostart(enabled) {
     if (bridge.available()) return bridge.call('SetCoreAutostart', enabled);
     demoService.autostart = enabled;
+  },
+  async setLanguage(language) {
+    if (bridge.available()) return bridge.call('SetUILanguage', language);
+    return language;
   },
   window(action) {
     if (!bridge.available()) return;

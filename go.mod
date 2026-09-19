@@ -3,10 +3,11 @@ module github.com/open-mcp-ai/termcp/gui
 go 1.25.9
 
 require (
+	github.com/gogpu/systray v0.3.0
 	github.com/mark3labs/mcp-go v0.50.0
-	github.com/open-mcp-ai/termcp v0.0.0
+	github.com/open-mcp-ai/termcp v0.0.0-20260918171947-9cd4991d03f3
 	github.com/wailsapp/wails/v2 v2.15.0
-	golang.org/x/sys v0.46.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -20,7 +21,8 @@ require (
 	github.com/charmbracelet/x/termios v0.1.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/go-webgpu/goffi v0.6.3 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
@@ -51,5 +53,3 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 )
-
-replace github.com/open-mcp-ai/termcp => ../termcp

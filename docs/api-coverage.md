@@ -1,6 +1,6 @@
 # Core 接口覆盖
 
-termcp-gui 通过受限 Wails API 桥访问当前 Core 的 `/api/` 路径。终端使用同一 Core 的 WebSocket；上传和下载由 Go 流式处理并调用系统文件选择器。
+Termcp 通过受限 Wails API 桥访问当前 Core 的 `/api/` 路径。终端使用同一 Core 的 WebSocket；上传和下载由 Go 流式处理并调用系统文件选择器。
 
 | 能力 | Core 接口 | GUI 入口 | 自动验证 |
 | --- | --- | --- | --- |

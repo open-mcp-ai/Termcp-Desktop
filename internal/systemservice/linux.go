@@ -60,12 +60,12 @@ func (m *linuxManager) Status() (Status, error) {
 
 func (m *linuxManager) Install(autostart bool) error {
 	if strings.TrimSpace(m.executable) == "" {
-		return errors.New("无法确定 termcp-gui 可执行文件路径")
+		return errors.New("无法确定 Termcp 可执行文件路径")
 	}
 	if err := os.MkdirAll(filepath.Dir(m.unitPath()), 0o755); err != nil {
 		return err
 	}
-	data := renderSystemdUnit(m.executable)
+	data := renderSystemdUnit(m.executable, filepath.Join(m.home, ".termcp"))
 	temp := m.unitPath() + ".tmp"
 	if err := os.WriteFile(temp, []byte(data), 0o600); err != nil {
 		return err
@@ -156,17 +156,17 @@ func runSystemctl(commandArgs, displayArgs []string) (string, error) {
 	return string(output), nil
 }
 
-func renderSystemdUnit(executable string) string {
+func renderSystemdUnit(executable, dataDir string) string {
 	return strings.Join([]string{
 		"[Unit]",
-		"Description=termcp Core managed by termcp-gui",
+		"Description=termcp Core managed by Termcp",
 		"",
 		"[Service]",
 		"Type=simple",
-		"ExecStart=" + systemdQuote(executable) + " --core-service",
+		"ExecStart=" + systemdQuote(executable) + " --core-service --core-data-dir " + systemdQuote(dataDir),
 		"Restart=on-failure",
 		"RestartSec=2",
-		"Environment=TERMCP_GUI_SERVICE=1",
+		"Environment=TERMCP_DESKTOP_SERVICE=1",
 		"",
 		"[Install]",
 		"WantedBy=default.target",

@@ -1,4 +1,4 @@
-# termcp-gui 架构
+# Termcp-Desktop 架构
 
 ## 分层
 
@@ -15,6 +15,7 @@ flowchart TB
     CORE --> DATA[~/.termcp\n配置 / 会话 / 历史]
     DAEMON --> SSH
     DAEMON --> DATA
+    TRAY[系统托盘\nCore / 服务状态与快捷操作] --> APP
 ```
 
 界面不重新实现 SSH。它只编排 termcp 的连接配置和会话资源。这样 MCP、WebUI 和 GUI 看到同一批会话、Shell、历史与转发。
@@ -29,9 +30,15 @@ flowchart TB
 4. 卸载服务时，先停止服务、移除定义，再立即恢复进程内 Core，保证桌面端继续可用。
 5. Core 就绪后，资源管理器从 `/api/connections`、`/api/sessions`、`/api/history`、`/api/forwards` 生成快照。
 
-平台服务后端分别为 macOS LaunchAgent、Linux systemd 用户服务和 Windows Service Control Manager。Windows 的服务入口使用 SCM 控制分派器处理 Stop 与 Shutdown，以专用的 `NT SERVICE\\termcp-gui-core` 虚拟账户运行，只授予它访问当前 Core 数据目录的权限，并在需要修改 SCM 时请求 UAC；Linux/macOS 使用 SIGTERM 完成有序关闭。
+平台服务后端分别为 macOS LaunchAgent、Linux systemd 用户服务和 Windows Service Control Manager。Windows 的服务入口使用 SCM 控制分派器处理 Stop 与 Shutdown，以专用的 `NT SERVICE\\termcp-desktop-core` 虚拟账户运行，只授予它访问当前 Core 数据目录的权限，并在需要修改 SCM 时请求 UAC；Linux/macOS 使用 SIGTERM 完成有序关闭。
 
-数据目录使用 termcp 自己的 `config.DefaultDataDir()`，因此 GUI 和命令行 Core 遵循相同的 `TERMCP_DATA_DIR` / `~/.termcp` 规则。
+## 桌面与托盘生命周期
+
+Termcp 使用 Wails 的单实例锁。关闭主窗口只隐藏窗口，Core 与托盘继续运行；托盘“退出 Termcp”才结束桌面进程。再次启动程序时，已有实例恢复并聚焦主窗口。
+
+macOS 托盘直接复用 Wails 已有的 AppKit 事件循环，通过 `NSStatusItem` 提供原生状态菜单。Windows 使用 `Shell_NotifyIconW`，Linux 使用 D-Bus StatusNotifierItem，因此 Linux 在 KDE、支持 AppIndicator 的 GNOME、XFCE 等桌面可用；没有托盘宿主的 Linux 环境仍可正常使用主窗口。
+
+Termcp-Desktop 启动时把 Core 数据目录显式设置为当前用户 Home 下的 `~/.termcp`（Windows 为 `%USERPROFILE%\.termcp`）。应用内 Core 与操作系统服务使用同一路径，升级或切换运行模式不会迁移数据。前端语言和工作区布局保存在 WebView 本地存储，不混入 Core 数据目录。
 
 ## 已完成能力
 
@@ -44,12 +51,13 @@ flowchart TB
 - Local / Remote / Dynamic 转发与通知规则管理。
 - 历史搜索、元数据编辑、正文和截图导出。
 - Wails 原生窗口控制和单应用打包。
+- 系统托盘状态、Core 快捷控制、主窗口隐藏/恢复与单实例唤醒。
 - 浏览器脱敏预览及错误状态。
 
 ## 仍需平台级补充
 
 - 系统监控没有对应的 termcp Core 接口，暂不显示模拟 CPU、内存或磁盘数据。
-- 托盘、自动升级与三平台安装包仍属于桌面发布层。
+- 自动升级与三平台安装包仍属于桌面发布层。
 - 终端仍需在目标平台持续压测中文输入法、宽字符、alternate screen 和大吞吐输出。
 
 远程会话的公开 `ssh_endpoint` 当前只返回 `remote`，无法可靠映射回具体连接配置。资源树因此把运行中会话单列，避免在多个连接节点下重复或错误归属；Core API 增加非敏感的连接名称后再建立层级关联。

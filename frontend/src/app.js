@@ -1,5 +1,6 @@
 import './styles.css';
 import { core } from './core.js';
+import { getLanguage, localizeDOM, setLanguage, t } from './i18n.js';
 import { TerminalController } from './terminal.js';
 
 const icons = {
@@ -41,7 +42,7 @@ const joinPath = (base, name) => `${String(base || '/').replace(/\/+$/, '')}/${n
 
 function loadWorkspaces() {
   try {
-    const parsed = JSON.parse(localStorage.getItem('termcp-gui-workspaces') || '[]');
+    const parsed = JSON.parse(localStorage.getItem('termcp-desktop-workspaces') || '[]');
     if (Array.isArray(parsed) && parsed.length) return parsed;
   } catch {}
   return [{ id: 'workspace-main', name: 'SSH 工作台', panes: [], maximized: '' }];
@@ -57,7 +58,7 @@ const state = {
   expanded: new Set(['connection:internal']),
   dialog: null,
   workspaces: loadWorkspaces(),
-  activeWorkspace: localStorage.getItem('termcp-gui-active-workspace') || 'workspace-main',
+  activeWorkspace: localStorage.getItem('termcp-desktop-active-workspace') || 'workspace-main',
   inspector: { tab: 'files', path: '/', data: null, loading: false, error: '', sessionID: '' },
   historyQuery: '',
   historyTranscript: '',
@@ -73,8 +74,8 @@ const terminals = new TerminalController(core, {
 });
 
 function saveWorkspaces() {
-  localStorage.setItem('termcp-gui-workspaces', JSON.stringify(state.workspaces));
-  localStorage.setItem('termcp-gui-active-workspace', state.activeWorkspace);
+  localStorage.setItem('termcp-desktop-workspaces', JSON.stringify(state.workspaces));
+  localStorage.setItem('termcp-desktop-active-workspace', state.activeWorkspace);
 }
 
 function shellCount() {
@@ -223,7 +224,7 @@ function servicePage() {
   const platform = platformNames[service.platform] || service.platform || '当前平台';
   const supportNotice = service.supported ? '' : '<div class="error-banner">当前平台不支持系统服务管理。</div>';
   const autostartScope = service.platform === 'windows' ? '跟随系统启动' : '跟随当前用户登录启动';
-  return `${header('Core 系统服务', 'LOCAL SERVICE', actions)}${supportNotice}<div class="service-metrics"><article><span>注册状态</span><b>${registered ? '已注册' : '未注册'}</b><small>${esc(platform)}</small></article><article><span>进程状态</span><b>${dot(service.running ? 'running' : 'error')}${service.running ? '运行中' : '已停止'}</b><small>${service.pid ? `PID ${service.pid}` : '没有服务进程'}</small></article><article><span>开机自启</span><b>${service.autostart ? '已开启' : '已关闭'}</b><small>${autostartScope}</small></article></div><section class="panel service-control"><div class="service-control-main"><span class="service-symbol">${icon('service', 25)}</span><div><b>本机 termcp Core</b><small>固定监听 127.0.0.1:18765，由 termcp-gui 的同一可执行文件提供后台服务。</small></div>${registered ? `<label class="switch"><input type="checkbox" data-service-autostart ${service.autostart ? 'checked' : ''}><span></span><em>开机自启</em></label>` : ''}</div><dl><div><dt>服务标识</dt><dd><code>${esc(service.label || '—')}</code></dd></div><div><dt>管理方式</dt><dd>${esc(service.description || platform)}</dd></div><div><dt>服务定义</dt><dd><code>${esc(service.definition || '—')}</code></dd></div><div><dt>可执行文件</dt><dd><code>${esc(service.executable || '—')}</code></dd></div><div><dt>日志</dt><dd><code>${esc(service.log_path || (service.platform === 'windows' ? 'Windows Event Log' : '—'))}</code></dd></div></dl></section><div class="service-note"><b>本机管理边界</b><p>GUI 只管理本机 Core。注册服务后，关闭桌面窗口不会停止 Core；卸载服务会自动切回应用内运行。SSH 主机仍作为连接资源由本机 Core 管理。</p></div>`;
+  return `${header('Core 系统服务', 'LOCAL SERVICE', actions)}${supportNotice}<div class="service-metrics"><article><span>注册状态</span><b>${registered ? '已注册' : '未注册'}</b><small>${esc(platform)}</small></article><article><span>进程状态</span><b>${dot(service.running ? 'running' : 'error')}${service.running ? '运行中' : '已停止'}</b><small>${service.pid ? `PID ${service.pid}` : '没有服务进程'}</small></article><article><span>开机自启</span><b>${service.autostart ? '已开启' : '已关闭'}</b><small>${autostartScope}</small></article></div><section class="panel service-control"><div class="service-control-main"><span class="service-symbol">${icon('service', 25)}</span><div><b>本机 termcp Core</b><small>固定监听 127.0.0.1:18765，由 Termcp 的同一可执行文件提供后台服务。</small></div>${registered ? `<label class="switch"><input type="checkbox" data-service-autostart ${service.autostart ? 'checked' : ''}><span></span><em>开机自启</em></label>` : ''}</div><dl><div><dt>服务标识</dt><dd><code>${esc(service.label || '—')}</code></dd></div><div><dt>管理方式</dt><dd>${esc(service.description || platform)}</dd></div><div><dt>持久化目录</dt><dd><code>${esc(service.data_dir || '~/.termcp')}</code></dd></div><div><dt>服务定义</dt><dd><code>${esc(service.definition || '—')}</code></dd></div><div><dt>可执行文件</dt><dd><code>${esc(service.executable || '—')}</code></dd></div><div><dt>日志</dt><dd><code>${esc(service.log_path || (service.platform === 'windows' ? 'Windows Event Log' : '—'))}</code></dd></div></dl></section><div class="service-note"><b>本机管理边界</b><p>Termcp 只管理本机 Core。注册服务后，关闭桌面窗口不会停止 Core；卸载服务会自动切回应用内运行。SSH 主机仍作为连接资源由本机 Core 管理。</p></div>`;
 }
 
 function resourceGrid() {
@@ -270,7 +271,7 @@ function settingsPage() {
   ];
   const base = state.data.core.address || 'http://127.0.0.1:18765';
   const mcp = JSON.stringify({ mcpServers: { termcp: { url: `${base}/stream` } } }, null, 2);
-  return `${header('应用与 API', 'TERMCP GUI', button(`${icon('refresh', 14)}刷新`, 'refresh'))}<section class="panel settings-list"><div><span><b>Core 模式</b><small>本机 Core 可在应用内运行，或注册为独立系统服务。</small></span><em>${coreMode()}</em></div><div><span><b>终端事件通道</b><small>会话列表、终端输出、输入、resize 与 notify_user 共用 WebSocket。</small></span><em>${esc(state.wsStatus)}</em></div><div><span><b>渲染引擎</b><small>Wails 系统 WebView，不打包 Electron 或 Chromium。</small></span><em>Native WebView</em></div></section><div class="section-title"><h2>MCP 接入</h2><span>Streamable HTTP</span></div><section class="panel mcp-config"><div><span>本机服务地址</span><code>${esc(base)}/stream</code><button data-copy="${esc(`${base}/stream`)}">复制地址</button></div><pre>${esc(mcp)}</pre><button class="button" data-copy="${esc(mcp)}">复制 MCP 配置</button></section><div class="section-title"><h2>Core 接口覆盖</h2><span>${endpoints.length} 组</span></div><div class="api-table">${endpoints.map(row => `<div><b>${row[0]}</b><span>${row[1]}</span><code>${row[2]}</code></div>`).join('')}</div>`;
+  return `${header('应用与 API', 'TERMCP DESKTOP', button(`${icon('refresh', 14)}刷新`, 'refresh'))}<section class="panel settings-list"><div><span><b>界面语言</b><small>切换后立即应用，并同步更新系统托盘。</small></span><select data-language data-i18n-ignore><option value="zh-CN" ${getLanguage() === 'zh-CN' ? 'selected' : ''}>简体中文</option><option value="en" ${getLanguage() === 'en' ? 'selected' : ''}>English</option></select></div><div><span><b>Core 模式</b><small>本机 Core 可在应用内运行，或注册为独立系统服务。</small></span><em>${coreMode()}</em></div><div><span><b>终端事件通道</b><small>会话列表、终端输出、输入、resize 与 notify_user 共用 WebSocket。</small></span><em>${esc(state.wsStatus)}</em></div><div><span><b>渲染引擎</b><small>Wails 系统 WebView，不打包 Electron 或 Chromium。</small></span><em>Native WebView</em></div></section><div class="section-title"><h2>MCP 接入</h2><span>Streamable HTTP</span></div><section class="panel mcp-config"><div><span>本机服务地址</span><code>${esc(base)}/stream</code><button data-copy="${esc(`${base}/stream`)}">复制地址</button></div><pre>${esc(mcp)}</pre><button class="button" data-copy="${esc(mcp)}">复制 MCP 配置</button></section><div class="section-title"><h2>Core 接口覆盖</h2><span>${endpoints.length} 组</span></div><div class="api-table">${endpoints.map(row => `<div><b>${row[0]}</b><span>${row[1]}</span><code>${row[2]}</code></div>`).join('')}</div>`;
 }
 function emptyPage() { return `${header('选择资源', 'RESOURCE EXPLORER')}<div class="empty-state large">从左侧选择连接、会话、Shell 或历史记录。</div>`; }
 
@@ -379,7 +380,8 @@ function modal() {
 
 function render() {
   terminals.clear();
-  document.querySelector('#app').innerHTML = `<div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>t_</span><b>termcp gui</b></div><div class="title-status" id="connection-badge">${dot(state.data.core.running ? 'running' : 'error')}<span>${state.data.core.running ? 'Core 运行中' : 'Core 已停止'}</span><small>${coreMode()}</small></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="最小化">—</button><button data-window="max" aria-label="最大化">□</button><button data-window="close" aria-label="关闭">×</button></div></header><div class="body">${rail()}${explorer()}<main class="content ${state.section === 'workspace' ? 'workspace-content' : ''}">${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">重试</button></div>` : ''}<div class="content-toolbar"><span>${core.preview ? '浏览器预览 · 脱敏演示资源' : '本机 Core 数据'}</span><button class="icon-btn ${state.loading ? 'spinning' : ''}" data-action="refresh" title="刷新资源">${icon('refresh', 15)}</button></div>${content()}</main></div></div>${modal()}`;
+  document.querySelector('#app').innerHTML = `<div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>t_</span><b>Termcp</b></div><div class="title-status" id="connection-badge">${dot(state.data.core.running ? 'running' : 'error')}<span>${state.data.core.running ? 'Core 运行中' : 'Core 已停止'}</span><small>${coreMode()}</small></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="最小化">—</button><button data-window="max" aria-label="最大化">□</button><button data-window="close" aria-label="隐藏到系统托盘">×</button></div></header><div class="body">${rail()}${explorer()}<main class="content ${state.section === 'workspace' ? 'workspace-content' : ''}">${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">重试</button></div>` : ''}<div class="content-toolbar"><span>${core.preview ? '浏览器预览 · 脱敏演示资源' : '本机 Core 数据'}</span><button class="icon-btn ${state.loading ? 'spinning' : ''}" data-action="refresh" title="刷新资源">${icon('refresh', 15)}</button></div>${content()}</main></div></div>${modal()}`;
+  localizeDOM(document.querySelector('#app'));
   if (state.section === 'workspace') mountWorkspace();
 }
 
@@ -418,7 +420,7 @@ async function loadInspector() {
     }
   } catch (error) { state.inspector.error = String(error); state.inspector.data = null; }
   state.inspector.loading = false;
-  const next = document.querySelector('.inspector-body'); if (next) next.innerHTML = inspectorBody(shell.session);
+  const next = document.querySelector('.inspector-body'); if (next) { next.innerHTML = inspectorBody(shell.session); localizeDOM(next); }
 }
 
 function openShell(shellID, sessionID) {
@@ -433,10 +435,20 @@ function openShell(shellID, sessionID) {
   saveWorkspaces(); render();
 }
 
+function navigateToSection(section) {
+  const allowed = new Set(['resources', 'workspace', 'sessions', 'history', 'service', 'settings']);
+  if (!allowed.has(section)) return;
+  state.section = section;
+  if (section === 'history') state.selected = { type: 'history-index', id: '' };
+  if (section === 'settings') state.selected = { type: 'settings', id: '' };
+  if (section === 'service') state.selected = { type: 'service', id: 'local' };
+  render();
+}
+
 function toast(message) {
   const element = document.querySelector('#toast');
   if (!element) return;
-  element.textContent = String(message); element.hidden = false;
+  element.textContent = t(String(message)); element.hidden = false;
   clearTimeout(toast.timer); toast.timer = setTimeout(() => { element.hidden = true; }, 3200);
 }
 
@@ -481,7 +493,7 @@ document.addEventListener('click', async event => {
   if (closeWorkspace) { event.stopPropagation(); state.workspaces = state.workspaces.filter(item => item.id !== closeWorkspace.dataset.closeWorkspace); state.activeWorkspace = state.workspaces[0]?.id || ''; saveWorkspaces(); render(); return; }
   const target = event.target.closest('button');
   if (!target) return;
-  if (target.dataset.section) { state.section = target.dataset.section; if (state.section === 'history') state.selected = { type: 'history-index', id: '' }; if (state.section === 'settings') state.selected = { type: 'settings', id: '' }; if (state.section === 'service') state.selected = { type: 'service', id: 'local' }; render(); return; }
+  if (target.dataset.section) { navigateToSection(target.dataset.section); return; }
   if (target.dataset.select) { const [type, ...parts] = target.dataset.select.split(':'); state.selected = { type, id: parts.join(':') }; if (type === 'history') state.historyTranscript = ''; render(); return; }
   if (target.dataset.openShell) { openShell(target.dataset.openShell, target.dataset.session); return; }
   if (target.dataset.workspace) { state.activeWorkspace = target.dataset.workspace; state.section = 'workspace'; saveWorkspaces(); render(); return; }
@@ -547,7 +559,7 @@ document.addEventListener('click', async event => {
 });
 
 document.addEventListener('input', event => {
-  if (event.target.matches('[data-filter]')) { state.filter = event.target.value; const treeElement = document.querySelector('.tree-scroll'); if (treeElement) treeElement.innerHTML = tree(state.filter.trim().toLowerCase()); }
+  if (event.target.matches('[data-filter]')) { state.filter = event.target.value; const treeElement = document.querySelector('.tree-scroll'); if (treeElement) { treeElement.innerHTML = tree(state.filter.trim().toLowerCase()); localizeDOM(treeElement); } }
   if (event.target.matches('[data-history-query]')) state.historyQuery = event.target.value;
   if (event.target.matches('[data-split-ratio]')) {
     const workspace = activeWorkspace(); workspace.ratio = Number(event.target.value);
@@ -558,6 +570,12 @@ document.addEventListener('input', event => {
 });
 
 document.addEventListener('change', async event => {
+  if (event.target.matches('[data-language]')) {
+    const language = setLanguage(event.target.value);
+    try { await core.setLanguage(language); } catch { /* The DOM locale remains usable if a legacy backend lacks this bridge. */ }
+    render();
+    return;
+  }
   if (event.target.matches('[data-service-autostart]')) {
     const enabled = event.target.checked;
     await run(enabled ? '已开启开机自启' : '已关闭开机自启', () => core.setAutostart(enabled));
@@ -643,6 +661,13 @@ async function searchHistory() {
   await run('', async () => { const result = await core.api('GET', `/api/history/search?q=${encode(query)}&limit=100`); state.data.history = result.data?.hits || []; }, { refresh: false, render: true });
 }
 
+window.runtime?.EventsOn?.('termcp:navigate', section => navigateToSection(section));
+window.runtime?.EventsOn?.('termcp:tray-result', (message, error) => {
+  toast(error || message || '操作完成');
+  refresh({ quiet: true });
+});
+
+core.setLanguage(getLanguage()).catch(() => {});
 render();
 refresh();
 terminals.connect();

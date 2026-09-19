@@ -13,4 +13,4 @@ http.createServer(async (req, res) => {
     const data = await readFile(path);
     res.writeHead(200, { 'Content-Type': mime[extname(path)] || 'application/octet-stream', 'Cache-Control': 'no-store' }).end(data);
   } catch { res.writeHead(404).end('Not found'); }
-}).listen(port, '127.0.0.1', () => console.log(`termcp-gui preview: http://127.0.0.1:${port}`));
+}).listen(port, '127.0.0.1', () => console.log(`Termcp preview: http://127.0.0.1:${port}`));

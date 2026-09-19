@@ -18,8 +18,6 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-const windowsServiceName = "termcp-gui-core"
-
 type windowsManager struct {
 	executable string
 	dataDir    string
@@ -30,13 +28,13 @@ func newPlatformManager(executable string) Manager {
 }
 
 func (m *windowsManager) Status() (Status, error) {
-	status := Status{Supported: true, Platform: "windows", Label: windowsServiceName, Definition: "services.msc · termcp-gui-core", LogPath: "Windows Event Viewer", Executable: m.executable, Description: "Windows 系统服务"}
+	status := Status{Supported: true, Platform: "windows", Label: WindowsServiceName, Definition: "services.msc · " + WindowsServiceName, LogPath: "Windows Event Viewer", Executable: m.executable, Description: "Windows 系统服务"}
 	managerHandle, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
 		return status, fmt.Errorf("连接 Windows 服务管理器: %w", err)
 	}
 	defer windows.CloseServiceHandle(managerHandle)
-	name, err := windows.UTF16PtrFromString(windowsServiceName)
+	name, err := windows.UTF16PtrFromString(WindowsServiceName)
 	if err != nil {
 		return status, err
 	}
@@ -47,7 +45,7 @@ func (m *windowsManager) Status() (Status, error) {
 		}
 		return status, err
 	}
-	service := &mgr.Service{Name: windowsServiceName, Handle: serviceHandle}
+	service := &mgr.Service{Name: WindowsServiceName, Handle: serviceHandle}
 	defer service.Close()
 	status.Installed = true
 	if config, configErr := service.Config(); configErr == nil {
@@ -67,7 +65,7 @@ func (m *windowsManager) Install(autostart bool) error {
 
 func (m *windowsManager) install(autostart bool) error {
 	if strings.TrimSpace(m.executable) == "" {
-		return errors.New("无法确定 termcp-gui 可执行文件路径")
+		return errors.New("无法确定 Termcp 可执行文件路径")
 	}
 	if err := os.MkdirAll(m.dataDir, 0o700); err != nil {
 		return fmt.Errorf("创建 Core 数据目录: %w", err)
@@ -83,12 +81,12 @@ func (m *windowsManager) install(autostart bool) error {
 	}
 	config := mgr.Config{
 		DisplayName:      "termcp Core",
-		Description:      "termcp-gui 管理的本机 termcp Core 服务",
+		Description:      "Termcp 管理的本机 termcp Core 服务",
 		StartType:        startType,
-		ServiceStartName: `NT SERVICE\` + windowsServiceName,
+		ServiceStartName: `NT SERVICE\` + WindowsServiceName,
 		SidType:          windows.SERVICE_SID_TYPE_UNRESTRICTED,
 	}
-	if existing, openErr := manager.OpenService(windowsServiceName); openErr == nil {
+	if existing, openErr := manager.OpenService(WindowsServiceName); openErr == nil {
 		defer existing.Close()
 		old, configErr := existing.Config()
 		if configErr != nil {
@@ -97,7 +95,7 @@ func (m *windowsManager) install(autostart bool) error {
 		old.DisplayName, old.Description, old.StartType = config.DisplayName, config.Description, config.StartType
 		old.ServiceStartName = config.ServiceStartName
 		old.BinaryPathName = windowsCommandLine(m.executable, m.dataDir)
-		_ = eventlog.InstallAsEventCreate(windowsServiceName, eventlog.Error|eventlog.Warning|eventlog.Info)
+		_ = eventlog.InstallAsEventCreate(WindowsServiceName, eventlog.Error|eventlog.Warning|eventlog.Info)
 		if err := existing.UpdateConfig(old); err != nil {
 			return err
 		}
@@ -115,11 +113,11 @@ func (m *windowsManager) install(autostart bool) error {
 		}
 		return waitWindowsState(existing, svc.Running, 15*time.Second)
 	}
-	service, err := manager.CreateService(windowsServiceName, m.executable, config, "--core-service", "--core-data-dir", m.dataDir)
+	service, err := manager.CreateService(WindowsServiceName, m.executable, config, "--core-service", "--core-data-dir", m.dataDir)
 	if err != nil {
 		return fmt.Errorf("注册 Windows 服务: %w", err)
 	}
-	_ = eventlog.InstallAsEventCreate(windowsServiceName, eventlog.Error|eventlog.Warning|eventlog.Info)
+	_ = eventlog.InstallAsEventCreate(WindowsServiceName, eventlog.Error|eventlog.Warning|eventlog.Info)
 	defer service.Close()
 	if err := grantWindowsDataAccess(m.dataDir); err != nil {
 		return err
@@ -140,7 +138,7 @@ func (m *windowsManager) uninstall() error {
 		return err
 	}
 	defer manager.Disconnect()
-	service, err := manager.OpenService(windowsServiceName)
+	service, err := manager.OpenService(WindowsServiceName)
 	if err != nil {
 		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 			return nil
@@ -153,7 +151,7 @@ func (m *windowsManager) uninstall() error {
 	if err := service.Delete(); err != nil {
 		return err
 	}
-	_ = eventlog.Remove(windowsServiceName)
+	_ = eventlog.Remove(WindowsServiceName)
 	_ = revokeWindowsDataAccess(m.dataDir)
 	return nil
 }
@@ -242,7 +240,7 @@ func openWindowsService() (*mgr.Service, func(), error) {
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("连接 Windows 服务管理器: %w", err)
 	}
-	service, err := manager.OpenService(windowsServiceName)
+	service, err := manager.OpenService(WindowsServiceName)
 	if err != nil {
 		manager.Disconnect()
 		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
@@ -285,7 +283,7 @@ func windowsCoreDataDir() string {
 }
 
 func grantWindowsDataAccess(dataDir string) error {
-	principal := `NT SERVICE\` + windowsServiceName + `:(OI)(CI)M`
+	principal := `NT SERVICE\` + WindowsServiceName + `:(OI)(CI)M`
 	output, err := exec.Command("icacls.exe", dataDir, "/grant", principal, "/T", "/C").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("授权 Core 服务访问数据目录: %w: %s", err, strings.TrimSpace(string(output)))
@@ -294,7 +292,7 @@ func grantWindowsDataAccess(dataDir string) error {
 }
 
 func revokeWindowsDataAccess(dataDir string) error {
-	principal := `NT SERVICE\` + windowsServiceName
+	principal := `NT SERVICE\` + WindowsServiceName
 	output, err := exec.Command("icacls.exe", dataDir, "/remove", principal, "/T", "/C").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("移除 Core 服务数据目录权限: %w: %s", err, strings.TrimSpace(string(output)))

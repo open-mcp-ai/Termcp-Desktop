@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/open-mcp-ai/termcp/gui/internal/systemservice"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 )
@@ -31,11 +32,11 @@ func runPlatformCoreService(start, stop func() error) error {
 		<-signals
 		return stop()
 	}
-	return svc.Run("termcp-gui-core", &coreServiceHandler{start: start, stop: stop})
+	return svc.Run(systemservice.WindowsServiceName, &coreServiceHandler{start: start, stop: stop})
 }
 
 func (h *coreServiceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, statuses chan<- svc.Status) (bool, uint32) {
-	logger, _ := eventlog.Open("termcp-gui-core")
+	logger, _ := eventlog.Open(systemservice.WindowsServiceName)
 	if logger != nil {
 		defer logger.Close()
 	}
