@@ -1,4 +1,5 @@
 import { t } from './i18n.js';
+import { terminalAppearance } from './appearance.js';
 
 const textEncoder = new TextEncoder();
 
@@ -82,15 +83,16 @@ export class TerminalController {
 
   async mount(shellID, element, readOnly = false) {
     if (!element || this.instances.has(shellID) || !window.Terminal) return;
+    const appearance = terminalAppearance();
     const term = new window.Terminal({
       cursorBlink: !readOnly,
       disableStdin: readOnly,
       convertEol: false,
       scrollback: 12000,
-      fontSize: 13,
+      fontSize: appearance.fontSize,
       lineHeight: 1.22,
-      fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-      theme: { background: '#111814', foreground: '#c8d5cc', cursor: '#7fc893', selectionBackground: '#47705888', black: '#17201b', green: '#71b985', brightGreen: '#92d5a4' },
+      fontFamily: appearance.fontFamily,
+      theme: appearance.theme,
       allowProposedApi: false,
     });
     let fit = null;

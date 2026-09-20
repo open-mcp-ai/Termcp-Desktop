@@ -113,7 +113,7 @@ function demoAPI(method, rawPath, body) {
     }
   }
   if (method === 'POST' && url.pathname === '/api/sessions') {
-    const session = { id: `session-demo-${Date.now()}`, name: payload.name || payload.ssh_config, status: 'running', mode: payload.mode || 'pty', ssh_endpoint: payload.ssh_config === 'internal' ? 'internal' : 'remote', shells: [] };
+    const session = { id: `session-demo-${Date.now()}`, name: payload.name || payload.ssh_config, status: 'running', mode: payload.mode || 'pty', ssh_endpoint: payload.ssh_config, shells: [] };
     const shell = { id: `shell-demo-${Date.now()}`, name: 'shell', status: 'running', mode: session.mode };
     session.shells.push(shell); demo.sessions.push(session); return response({ session_id: session.id, shell_id: shell.id });
   }
@@ -195,6 +195,10 @@ export const core = {
   async setLanguage(language) {
     if (bridge.available()) return bridge.call('SetUILanguage', language);
     return language;
+  },
+  async systemFonts() {
+    if (bridge.available()) return bridge.call('SystemFonts');
+    return ['system-ui', 'Arial', 'Helvetica Neue', 'SF Pro Text', 'Segoe UI', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', 'Georgia', 'Times New Roman', 'Courier New', 'Menlo', 'Monaco'];
   },
   window(action) {
     if (!bridge.available()) return;

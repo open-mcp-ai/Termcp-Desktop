@@ -1,11 +1,13 @@
 import './styles.css';
+import './theme.css';
 import { core } from './core.js';
+import { getAppearance, setAppearance } from './appearance.js';
 import { getLanguage, localizeDOM, setLanguage, t } from './i18n.js';
 import { TerminalController } from './terminal.js';
 
 const icons = {
-  resources: '<path d="M4 5h6l2 2h8v12H4z"/><path d="M4 9h16"/>',
-  sessions: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="m8 10 2 2-2 2m5 0h3"/>',
+  resources: '<circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="m9.2 9.2 5.6 5.6M14 7h6v6"/>',
+  sessions: '<rect x="4" y="4" width="14" height="12" rx="2"/><path d="M8 20h12V8M8 9l2 2-2 2m5 0h2"/>',
   history: '<circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2M4 5v4h4"/>',
   terminal: '<path d="m5 7 4 5-4 5m7 0h7"/>',
   core: '<path d="M8 3h8v4h4v10h-4v4H8v-4H4V7h4z"/><circle cx="12" cy="12" r="3"/>',
@@ -22,6 +24,10 @@ const icons = {
   forward: '<path d="M5 7h11m0 0-3-3m3 3-3 3M19 17H8m0 0 3-3m-3 3 3 3"/>',
   bell: '<path d="M6 16h12l-2-3V9a4 4 0 0 0-8 0v4z"/><path d="M10 19h4"/>',
   download: '<path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/>',
+  collapse: '<path d="m14 7-5 5 5 5"/>',
+  expand: '<path d="m10 7 5 5-5 5"/>',
+  copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+  external: '<path d="M14 4h6v6m0-6-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/>',
 };
 
 const icon = (name, size = 17) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || ''}</svg>`;
@@ -45,7 +51,25 @@ function loadWorkspaces() {
     const parsed = JSON.parse(localStorage.getItem('termcp-desktop-workspaces') || '[]');
     if (Array.isArray(parsed) && parsed.length) return parsed;
   } catch {}
-  return [{ id: 'workspace-main', name: 'SSH 工作台', panes: [], maximized: '' }];
+  return [];
+}
+
+function loadClosedSessionTabs() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('termcp-desktop-closed-session-tabs') || '[]');
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function loadCollapsedGroups() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('termcp-desktop-collapsed-groups') || '[]');
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
 }
 
 const state = {
@@ -57,16 +81,25 @@ const state = {
   selected: { type: 'core', id: 'core' },
   expanded: new Set(['connection:internal']),
   dialog: null,
+  appearance: getAppearance(),
+  contextMenu: null,
+  draggedWorkspace: '',
+  draggedSession: '',
+  dropRegion: '',
   workspaces: loadWorkspaces(),
+  closedSessionTabs: loadClosedSessionTabs(),
+  collapsedGroups: loadCollapsedGroups(),
   activeWorkspace: localStorage.getItem('termcp-desktop-active-workspace') || 'workspace-main',
-  inspector: { tab: 'files', path: '/', data: null, loading: false, error: '', sessionID: '' },
+  inspector: { tab: 'files', path: '/', data: null, loading: false, error: '', sessionID: '', collapsed: localStorage.getItem('termcp-desktop-inspector-collapsed') === '1' },
   historyQuery: '',
   historyTranscript: '',
   wsStatus: core.preview ? 'preview' : 'connecting',
   service: { supported: true, platform: '', installed: false, running: false, autostart: false, pid: 0, label: '', definition: '', log_path: '', executable: '', description: '' },
+  systemFonts: { items: ['system-ui'], loading: false, loaded: false, error: '' },
 };
 
 let refreshTimer;
+let connectionClickTimer;
 const terminals = new TerminalController(core, {
   status(status) { state.wsStatus = status; updateConnectionBadge(); },
   sessions() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh({ quiet: true }), 180); },
@@ -76,6 +109,11 @@ const terminals = new TerminalController(core, {
 function saveWorkspaces() {
   localStorage.setItem('termcp-desktop-workspaces', JSON.stringify(state.workspaces));
   localStorage.setItem('termcp-desktop-active-workspace', state.activeWorkspace);
+  localStorage.setItem('termcp-desktop-closed-session-tabs', JSON.stringify([...state.closedSessionTabs]));
+}
+
+function saveCollapsedGroups() {
+  localStorage.setItem('termcp-desktop-collapsed-groups', JSON.stringify([...state.collapsedGroups]));
 }
 
 function shellCount() {
@@ -95,11 +133,15 @@ function historyByID(id) { return state.data.history.find(item => item.id === id
 function activeWorkspace() {
   let workspace = state.workspaces.find(item => item.id === state.activeWorkspace);
   if (!workspace) {
-    workspace = state.workspaces[0] || { id: `workspace-${Date.now()}`, name: 'SSH 工作台', panes: [], maximized: '' };
+    workspace = state.workspaces[0] || { id: `session-tab-empty`, name: '新会话', panes: [], maximized: '' };
     if (!state.workspaces.length) state.workspaces.push(workspace);
     state.activeWorkspace = workspace.id;
   }
   return workspace;
+}
+function workspaceSession(workspace) {
+  if (!workspace) return null;
+  return sessionByID(workspace.primarySessionID || workspace.panes?.[0]?.sessionID);
 }
 function activePane() {
   const workspace = activeWorkspace();
@@ -125,9 +167,34 @@ async function refresh({ quiet = false } = {}) {
 function reconcileWorkspaces() {
   for (const workspace of state.workspaces) {
     workspace.panes = (workspace.panes || []).filter(pane => shellByID(pane.shellID));
+    workspace.primarySessionID ||= workspace.panes[0]?.sessionID || '';
+    if (workspace.primarySessionID && !sessionByID(workspace.primarySessionID)) workspace.primarySessionID = workspace.panes[0]?.sessionID || '';
+    workspace.mergedSessionIDs = (workspace.mergedSessionIDs || []).filter(id => id !== workspace.primarySessionID && sessionByID(id));
+    const session = sessionByID(workspace.primarySessionID);
+    if (session) workspace.name = session.name;
     if (!workspace.panes.some(pane => pane.shellID === workspace.activeShell)) workspace.activeShell = workspace.panes[0]?.shellID || '';
     if (workspace.maximized && !workspace.panes.some(pane => pane.shellID === workspace.maximized)) workspace.maximized = '';
   }
+  if (state.data.sessions.length) {
+    state.workspaces = state.workspaces.filter(workspace => workspace.panes.length > 0 && workspaceSession(workspace));
+  } else {
+    state.workspaces = state.workspaces.filter(workspace => !workspace.primarySessionID);
+  }
+  const covered = new Set(state.workspaces.flatMap(workspace => [workspace.primarySessionID, ...(workspace.mergedSessionIDs || [])]).filter(Boolean));
+  for (const session of state.data.sessions) {
+    const shell = (session.shells || []).find(item => item.status === 'running') || session.shells?.[0];
+    if (!shell || covered.has(session.id) || state.closedSessionTabs.has(session.id)) continue;
+    state.workspaces.push({
+      id: `session-tab-${session.id}`,
+      name: session.name,
+      primarySessionID: session.id,
+      panes: [{ shellID: shell.id, sessionID: session.id }],
+      activeShell: shell.id,
+      maximized: '',
+      layout: 'grid',
+    });
+  }
+  if (!state.workspaces.some(workspace => workspace.id === state.activeWorkspace)) state.activeWorkspace = state.workspaces[0]?.id || '';
   saveWorkspaces();
 }
 
@@ -141,17 +208,23 @@ function selectedResource() {
 }
 
 function rail() {
-  const items = [['resources', '资源', 'resources'], ['workspace', '工作台', 'terminal'], ['sessions', '会话', 'sessions'], ['history', '历史', 'history'], ['service', '系统服务', 'service']];
-  return `<aside class="rail"><div class="rail-logo">t_</div><nav aria-label="主导航">${items.map(([key, label, glyph]) => `<button data-section="${key}" class="${state.section === key ? 'active' : ''}" title="${label}" aria-label="${label}">${icon(glyph)}</button>`).join('')}</nav><div class="rail-bottom"><button data-select="core:core" title="Core 管理">${icon('core')}</button><button data-section="settings" class="${state.section === 'settings' ? 'active' : ''}" title="设置">${icon('settings')}</button></div></aside>`;
+  const items = [['resources', '连接', 'resources'], ['workspace', '终端', 'terminal'], ['history', '历史', 'history'], ['service', '服务', 'service']];
+  const item = ([key, label, glyph]) => `<button data-section="${key}" class="${state.section === key || (key === 'workspace' && state.section === 'sessions') ? 'active' : ''}" title="${label}" aria-label="${label}"><span>${icon(glyph, 19)}</span><small>${label}</small></button>`;
+  return `<aside class="rail"><nav aria-label="主导航">${items.map(item).join('')}</nav><div class="rail-bottom">${item(['core', 'Core', 'core'])}${item(['settings', '设置', 'settings'])}</div></aside>`;
 }
 
 function explorer() {
-  return `<aside class="explorer"><div class="explorer-head"><div><span>资源管理器</span><small>LOCAL TERMCP</small></div><div class="mini-actions"><button class="icon-btn" data-action="new-connection" title="新建连接">${icon('plus', 14)}</button><button class="icon-btn" data-action="new-session" title="新建会话">${icon('terminal', 14)}</button></div></div><label class="search">${icon('search', 14)}<input type="search" placeholder="筛选资源" value="${esc(state.filter)}" data-filter></label><div class="tree-scroll">${tree(state.filter.trim().toLowerCase())}</div><button class="core-card ${state.selected.type === 'core' ? 'selected' : ''}" data-select="core:core"><span>${dot(state.data.core.running ? 'running' : 'error')}<b>Local Core</b><small>${coreMode()}</small></span><span class="core-counts"><b>${state.data.sessions.length}</b> 会话 · <b>${shellCount()}</b> Shell</span></button></aside>`;
+  const workspace = state.section === 'workspace';
+  const sessionArea = workspace || state.section === 'sessions';
+  return `<aside class="explorer"><div class="explorer-head"><div><span>${sessionArea ? '会话' : '连接配置'}</span><small>${sessionArea ? 'SESSION WORKSPACE' : 'DOUBLE-CLICK TO CONNECT'}</small></div><div class="mini-actions"><button class="icon-btn ${state.loading ? 'spinning' : ''}" data-action="refresh" title="刷新资源">${icon('refresh', 14)}</button>${sessionArea ? `<button class="icon-btn" data-action="new-session" title="新建会话">${icon('plus', 14)}</button>` : `<button class="icon-btn" data-action="new-connection" title="新建连接">${icon('plus', 14)}</button>`}</div></div><label class="search">${icon('search', 14)}<input type="search" placeholder="${sessionArea ? '筛选会话' : '筛选连接配置'}" value="${esc(state.filter)}" data-filter></label><div class="tree-scroll">${tree(state.filter.trim().toLowerCase())}</div></aside>`;
 }
 
 function coreMode() { return state.service.installed ? '系统服务' : '应用内运行'; }
 
-const group = (name, content) => `<section class="tree-group"><header><span>⌄</span>${name}</header>${content || '<p>没有资源</p>'}</section>`;
+const group = (name, content, key = name) => {
+  const collapsed = state.collapsedGroups.has(key);
+  return `<section class="tree-group ${collapsed ? 'collapsed' : ''}"><header><button class="tree-group-toggle" data-group-toggle="${esc(key)}" aria-expanded="${collapsed ? 'false' : 'true'}"><span>${icon('chevron', 11)}</span><b>${name}</b></button></header><div class="tree-group-content">${collapsed ? '' : (content || '<p>没有资源</p>')}</div></section>`;
+};
 const matches = (value, query) => !query || String(value).toLowerCase().includes(query);
 
 function tree(query) {
@@ -159,34 +232,32 @@ function tree(query) {
     const items = state.data.history.filter(item => matches(`${item.name} ${(item.tags || []).join(' ')}`, query));
     return group('历史记录', items.map(historyNode).join(''));
   }
-  if (state.section === 'sessions') {
-    return group('运行中的会话', state.data.sessions.filter(item => matches(`${item.name} ${item.id}`, query)).map(sessionNode).join(''));
-  }
-  if (state.section === 'workspace') {
-    return group('工作区', state.workspaces.map(workspaceNode).join('')) + group('可用 Shell', state.data.sessions.flatMap(session => (session.shells || []).map(shell => shellNode(shell, session))).join(''));
+  if (state.section === 'sessions' || state.section === 'workspace') {
+    const sessions = state.data.sessions.filter(item => matches(`${item.name} ${item.ssh_endpoint || ''} ${item.id}`, query));
+    return group('会话列表', sessions.map(sessionNode).join(''), 'session-list');
   }
   if (state.section === 'service') {
     const service = state.service;
     return group('本机服务', `<button class="tree-row leaf selected" data-section="service">${icon('service', 13)}<span><b>Core 系统服务</b><small>${service.installed ? (service.running ? '已注册 · 运行中' : '已注册 · 已停止') : '未注册'}</small></span>${dot(service.running ? 'running' : 'error')}</button>`);
   }
+  if (state.section === 'core') {
+    return group('本机 Core', `<button class="tree-row leaf selected" data-section="core">${icon('core', 14)}<span><b>Core 管理</b><small>${state.data.core.running ? '运行中' : '已停止'} · ${coreMode()}</small></span>${dot(state.data.core.running ? 'running' : 'error')}</button>`);
+  }
   if (state.section === 'settings') return '<div class="tree-empty">应用、Core 与 API</div>';
   const connections = state.data.connections.filter(item => matches(`${item.name} ${item.host || ''} ${item.user || ''}`, query));
-  const sessions = state.data.sessions.filter(item => matches(`${item.name} ${item.id}`, query));
-  const history = state.data.history.filter(item => matches(`${item.name} ${item.reason || ''}`, query)).slice(0, 5);
-  return group('连接配置', connections.map(connectionNode).join('')) + group('运行中的会话', sessions.map(sessionNode).join('')) + group('最近历史', history.map(historyNode).join(''));
+  return group('连接配置', connections.map(connectionNode).join(''), 'connection-list');
 }
 
 function connectionNode(connection) {
-  const key = `connection:${connection.name}`;
-  const open = state.expanded.has(key);
-  const sessions = state.data.sessions.filter(session => session.ssh_endpoint === connection.name || (connection.kind === 'internal' && session.ssh_endpoint === 'internal'));
-  return `<div class="tree-node"><div class="tree-row-wrap"><button class="disclosure-button ${open ? 'open' : ''}" data-toggle="${esc(key)}" aria-label="${open ? '收起' : '展开'} ${esc(connection.name)}">${icon('chevron', 12)}</button><button class="tree-row ${state.selected.type === 'connection' && state.selected.id === connection.name ? 'selected' : ''}" data-select="connection:${esc(connection.name)}"><span class="resource-icon ${esc(connection.kind)}">${connection.kind === 'internal' ? '›_' : '⌁'}</span><span><b>${esc(connection.name)}</b><small>${esc(connection.kind === 'internal' ? '本机' : connection.host || 'SSH')}</small></span>${dot('running')}</button></div>${open ? `<div class="tree-children">${sessions.map(sessionNode).join('') || '<p>没有可归属的会话</p>'}</div>` : ''}</div>`;
+  const endpoint = connection.kind === 'internal' ? '本机 Core' : `${connection.user ? `${connection.user}@` : ''}${connection.host || 'SSH'}`;
+  return `<button class="tree-row connection-profile ${state.selected.type === 'connection' && state.selected.id === connection.name ? 'selected' : ''}" data-connection-profile="${esc(connection.name)}" title="双击新建会话"><span class="resource-icon ${esc(connection.kind)}">${connection.kind === 'internal' ? '›_' : '⌁'}</span><span><b>${esc(connection.name)}</b><small>${esc(endpoint)}</small></span><em>双击连接</em></button>`;
 }
 
 function sessionNode(session) {
   const key = `session:${session.id}`;
   const open = state.expanded.has(key);
-  return `<div class="tree-node"><div class="tree-row-wrap"><button class="disclosure-button ${open ? 'open' : ''}" data-toggle="${esc(key)}" aria-label="${open ? '收起' : '展开'} ${esc(session.name)}">${icon('chevron', 11)}</button><button class="tree-row sub ${state.selected.type === 'session' && state.selected.id === session.id ? 'selected' : ''}" data-select="session:${esc(session.id)}">${dot(session.status)}<span><b>${esc(session.name)}</b><small>${esc(session.mode)} · ${(session.shells || []).length} Shell</small></span></button></div>${open ? `<div class="tree-children shells">${(session.shells || []).map(shell => shellNode(shell, session)).join('') || '<p>没有 Shell</p>'}</div>` : ''}</div>`;
+  const action = state.section === 'workspace' ? `data-open-session="${esc(session.id)}"` : `data-select="session:${esc(session.id)}"`;
+  return `<div class="tree-node" data-session-context="${esc(session.id)}" data-session-drag="${esc(session.id)}" draggable="true"><div class="tree-row-wrap"><button class="disclosure-button ${open ? 'open' : ''}" data-toggle="${esc(key)}" aria-label="${open ? '收起' : '展开'} ${esc(session.name)}">${icon('chevron', 11)}</button><button class="tree-row sub ${workspaceSession(activeWorkspace())?.id === session.id || (state.selected.type === 'session' && state.selected.id === session.id) ? 'selected' : ''}" ${action}>${dot(session.status)}<span><b>${esc(session.name)}</b><small>${esc(session.ssh_endpoint || session.mode)} · ${(session.shells || []).length} Shell</small></span></button></div>${open ? `<div class="tree-children shells">${(session.shells || []).map(shell => shellNode(shell, session)).join('') || '<p>没有 Shell</p>'}</div>` : ''}</div>`;
 }
 
 function shellNode(shell, session) {
@@ -203,6 +274,7 @@ function content() {
   if (state.section === 'workspace') return workspacePage();
   if (state.section === 'service') return servicePage();
   if (state.section === 'settings') return settingsPage();
+  if (state.section === 'core') return corePage(state.data.core);
   if (state.section === 'history' && state.selected.type !== 'history') return historyIndexPage();
   const resource = selectedResource();
   const pages = { core: corePage, connection: connectionPage, session: sessionPage, shell: shellPage, history: historyPage };
@@ -266,37 +338,46 @@ function historyPage(item) {
 }
 
 function settingsPage() {
-  const endpoints = [
-    ['连接配置', 'GET / PUT / DELETE', '/api/connections/{name}'], ['连接测试', 'POST', '/api/connections/test'], ['会话', 'GET / POST / PATCH / DELETE', '/api/sessions'], ['终端', 'WebSocket', '/api/ui/ws'], ['Shell', 'GET / POST / DELETE', '/api/sessions/{id}/shells'], ['历史', 'GET / PATCH / DELETE', '/api/history'], ['文件', 'GET / POST / PUT / DELETE', '/api/sessions/{id}/files'], ['转发', 'GET / POST / DELETE', '/api/forwards'], ['通知', 'GET / DELETE', '/api/notifications'],
-  ];
   const base = state.data.core.address || 'http://127.0.0.1:18765';
   const mcp = JSON.stringify({ mcpServers: { termcp: { url: `${base}/stream` } } }, null, 2);
-  return `${header('应用与 API', 'TERMCP DESKTOP', button(`${icon('refresh', 14)}刷新`, 'refresh'))}<section class="panel settings-list"><div><span><b>界面语言</b><small>切换后立即应用，并同步更新系统托盘。</small></span><select data-language data-i18n-ignore><option value="zh-CN" ${getLanguage() === 'zh-CN' ? 'selected' : ''}>简体中文</option><option value="en" ${getLanguage() === 'en' ? 'selected' : ''}>English</option></select></div><div><span><b>Core 模式</b><small>本机 Core 可在应用内运行，或注册为独立系统服务。</small></span><em>${coreMode()}</em></div><div><span><b>终端事件通道</b><small>会话列表、终端输出、输入、resize 与 notify_user 共用 WebSocket。</small></span><em>${esc(state.wsStatus)}</em></div><div><span><b>渲染引擎</b><small>Wails 系统 WebView，不打包 Electron 或 Chromium。</small></span><em>Native WebView</em></div></section><div class="section-title"><h2>MCP 接入</h2><span>Streamable HTTP</span></div><section class="panel mcp-config"><div><span>本机服务地址</span><code>${esc(base)}/stream</code><button data-copy="${esc(`${base}/stream`)}">复制地址</button></div><pre>${esc(mcp)}</pre><button class="button" data-copy="${esc(mcp)}">复制 MCP 配置</button></section><div class="section-title"><h2>Core 接口覆盖</h2><span>${endpoints.length} 组</span></div><div class="api-table">${endpoints.map(row => `<div><b>${row[0]}</b><span>${row[1]}</span><code>${row[2]}</code></div>`).join('')}</div>`;
+  const appearance = state.appearance;
+  const fonts = [...new Set(['system-ui', ...state.systemFonts.items])];
+  const fontStatus = state.systemFonts.loading ? '正在读取系统字体…' : state.systemFonts.error ? '无法读取系统字体，可直接输入字体名称。' : `已找到 ${Math.max(0, fonts.length - 1)} 个系统字体`;
+  return `${header('设置', 'TERMCP DESKTOP', button(`${icon('refresh', 14)}刷新`, 'refresh'))}<div class="settings-grid"><section class="settings-card appearance-card"><header><div><span>APPEARANCE</span><h2>界面外观</h2></div><small>即时生效</small></header><div class="setting-row"><label><b>主题</b><small>浅色与深色使用同一套中性色阶。</small></label><select data-appearance="theme"><option value="light" ${appearance.theme === 'light' ? 'selected' : ''}>浅色</option><option value="dark" ${appearance.theme === 'dark' ? 'selected' : ''}>深色</option></select></div><div class="setting-row"><label><b>字号</b><small>使用明确的像素值，同时应用到终端。</small></label><div class="font-size-control"><select data-appearance="fontSize">${Array.from({ length: 9 }, (_, index) => index + 12).map(size => `<option value="${size}" ${appearance.fontSize === size ? 'selected' : ''}>${size}</option>`).join('')}</select><span>px</span></div></div><div class="setting-row font-setting"><label><b>系统字体</b><small>${fontStatus}</small></label><input list="system-font-families" value="${esc(appearance.fontFamily)}" data-appearance="fontFamily" data-font-family placeholder="搜索或输入字体名称"><datalist id="system-font-families">${fonts.map(font => `<option value="${esc(font)}">`).join('')}</datalist></div><div class="font-preview" data-font-preview><span>Aa 文</span><p>Termcp 让本机 Core、SSH 会话和文件管理保持在一个清晰的工作流中。</p><code>debian@host:~$ termcp</code></div></section><section class="settings-card"><header><div><span>APPLICATION</span><h2>应用设置</h2></div></header><div class="setting-row"><label><b>界面语言</b><small>同步更新应用界面与系统托盘。</small></label><select data-language data-i18n-ignore><option value="zh-CN" ${getLanguage() === 'zh-CN' ? 'selected' : ''}>简体中文</option><option value="en" ${getLanguage() === 'en' ? 'selected' : ''}>English</option></select></div><div class="setting-row"><label><b>Core 运行方式</b><small>管理当前电脑上的 termcp Core。</small></label><button class="setting-link" data-section="core">${coreMode()} ${icon('chevron', 14)}</button></div><div class="setting-row"><label><b>系统服务</b><small>注册、开机自启和后台运行。</small></label><button class="setting-link" data-section="service">${state.service.installed ? '已注册' : '未注册'} ${icon('chevron', 14)}</button></div><div class="setting-row"><label><b>终端事件通道</b><small>终端输出、输入与 resize 共用 WebSocket。</small></label><em>${esc(state.wsStatus)}</em></div><div class="setting-row"><label><b>渲染引擎</b><small>Wails 系统 WebView。</small></label><em>Native WebView</em></div></section><section class="settings-card developer-card"><header><div><span>INTEGRATIONS</span><h2>MCP 接入</h2></div><small>Streamable HTTP</small></header><div class="mcp-endpoint"><div><span>本机服务地址</span><code>${esc(base)}/stream</code></div><button data-copy="${esc(`${base}/stream`)}">复制地址</button></div><pre>${esc(mcp)}</pre><button class="button" data-copy="${esc(mcp)}">复制 MCP 配置</button></section></div>`;
 }
 function emptyPage() { return `${header('选择资源', 'RESOURCE EXPLORER')}<div class="empty-state large">从左侧选择连接、会话、Shell 或历史记录。</div>`; }
 
 function workspacePage() {
   const workspace = activeWorkspace();
-  workspace.layout ||= 'grid'; workspace.ratio ||= 50;
+  workspace.layout ||= 'grid';
   const panes = workspace.maximized ? workspace.panes.filter(pane => pane.shellID === workspace.maximized) : workspace.panes;
-  const tabs = state.workspaces.map(item => `<button class="workspace-tab ${item.id === workspace.id ? 'active' : ''}" data-workspace="${esc(item.id)}"><span>${esc(item.name)}</span><small>${item.panes.length}</small>${state.workspaces.length > 1 ? `<i data-close-workspace="${esc(item.id)}">×</i>` : ''}</button>`).join('');
-  const ratio = panes.length === 2 && !workspace.maximized ? `<label class="split-ratio" title="调整分屏比例"><input type="range" min="20" max="80" value="${workspace.ratio}" data-split-ratio><span>${workspace.ratio}%</span></label>` : '';
-  return `<div class="workspace-page"><div class="workspace-tabs">${tabs}<button data-action="new-workspace" title="新建工作区">＋</button></div><div class="workspace-toolbar"><span>${dot(state.wsStatus === 'connected' || core.preview ? 'running' : 'error')} ${core.preview ? '浏览器预览' : `终端通道 ${state.wsStatus}`}</span><div>${ratio}${button(`${icon('plus', 13)}添加窗格`, 'add-pane')}${button('左右', 'layout-columns')}${button('上下', 'layout-rows')}${button(`${icon('split', 13)}平铺`, 'tile-panes')}${button(`${icon('edit', 13)}重命名`, 'rename-workspace')}</div></div>${panes.length ? `<div class="terminal-workspace layout-${esc(workspace.layout)} ${workspace.maximized ? 'maximized' : ''}" style="--pane-count:${panes.length};--split-ratio:${workspace.ratio}%">${panes.map(pane => terminalPane(pane, workspace)).join('')}</div>` : `<div class="workspace-empty"><span>›_</span><h2>空工作区</h2><p>从资源树选择 Shell，或在现有会话中创建一个。</p>${button('添加 Shell', 'add-pane', 'primary')}</div>`}<aside class="workspace-inspector">${inspectorShell()}</aside></div>`;
+  const tabs = state.workspaces.map(item => {
+    const session = workspaceSession(item);
+    return `<button class="workspace-tab ${item.id === workspace.id ? 'active' : ''}" data-workspace="${esc(item.id)}" data-workspace-drag="${esc(item.id)}" data-session-drag="${esc(session?.id || '')}" draggable="true" title="拖动会话标签排序，拖到终端区域可自动分屏">${dot(session?.status || 'archived')}<span>${esc(session?.name || item.name || '新会话')}</span><small>${esc(session?.ssh_endpoint || 'local')}</small>${state.workspaces.length > 1 ? `<i data-close-workspace="${esc(item.id)}" title="关闭标签">×</i>` : ''}</button>`;
+  }).join('');
+  const dropClass = state.dropRegion ? `drop-${state.dropRegion}` : '';
+  const terminal = panes.length
+    ? `<div class="terminal-workspace layout-${esc(workspace.layout)} ${workspace.maximized ? 'maximized' : ''} ${dropClass}" data-pane-count="${panes.length}" data-session-drop-zone>${panes.map(pane => terminalPane(pane, workspace)).join('')}<div class="session-drop-hint"><span>${state.dropRegion === 'top' ? '在上方分屏' : state.dropRegion === 'bottom' ? '在下方分屏' : state.dropRegion === 'left' ? '在左侧分屏' : '在右侧分屏'}</span></div></div>`
+    : `<div class="workspace-empty ${dropClass}" data-session-drop-zone><span>›_</span><h2>还没有打开的会话</h2><p>前往“连接”栏目，双击连接配置即可创建并打开新会话。</p><button class="button primary" data-section="resources">打开连接配置</button><div class="session-drop-hint"><span>松开以打开会话</span></div></div>`;
+  return `<div class="workspace-page ${state.inspector.collapsed ? 'inspector-collapsed' : ''}"><div class="workspace-tabs"><div class="workspace-tab-scroll">${tabs}</div><button class="new-workspace-tab" data-action="new-session" title="新建 SSH 会话" aria-label="新建 SSH 会话">${icon('plus', 16)}</button></div>${terminal}<aside class="workspace-inspector ${state.inspector.collapsed ? 'collapsed' : ''}">${inspectorShell()}</aside></div>`;
 }
 
 function terminalPane(pane, workspace) {
   const item = shellByID(pane.shellID);
   if (!item) return '';
   const active = workspace.activeShell === pane.shellID;
-  return `<section class="terminal-pane ${active ? 'active' : ''}" data-pane-shell="${esc(pane.shellID)}"><header><button class="pane-title" data-active-pane="${esc(pane.shellID)}">${dot(item.status)}<span><b>${esc(item.session.name)}</b><small>${esc(item.name || 'shell')}</small></span></button><div><button data-action="new-shell" data-id="${esc(item.session.id)}" title="同连接新建 Shell">＋</button><button data-max-pane="${esc(pane.shellID)}" title="${workspace.maximized ? '恢复平铺' : '最大化'}">${workspace.maximized ? '❐' : '□'}</button><button data-remove-pane="${esc(pane.shellID)}" title="移除窗格">×</button></div></header><div class="terminal-host" data-terminal-shell="${esc(pane.shellID)}"></div></section>`;
+  return `<section class="terminal-pane ${active ? 'active' : ''}" data-pane-shell="${esc(pane.shellID)}" data-pane-activate="${esc(pane.shellID)}"><div class="terminal-host" data-terminal-shell="${esc(pane.shellID)}"></div></section>`;
 }
 
 function inspectorShell() {
+  if (state.inspector.collapsed) {
+    return `<button class="inspector-expand" data-toggle-inspector title="展开会话工具">${icon('collapse', 16)}</button><nav class="inspector-rail" aria-label="会话工具"><button data-inspector-tab="files" class="${state.inspector.tab === 'files' ? 'active' : ''}" title="文件">${icon('folder', 16)}</button><button data-inspector-tab="forwards" class="${state.inspector.tab === 'forwards' ? 'active' : ''}" title="转发">${icon('forward', 16)}</button><button data-inspector-tab="notifications" class="${state.inspector.tab === 'notifications' ? 'active' : ''}" title="通知">${icon('bell', 16)}</button></nav>`;
+  }
   const pane = activePane();
   const item = pane && shellByID(pane.shellID);
-  if (!item) return '<div class="inspector-empty">选择终端窗格后可管理文件、转发和通知。</div>';
+  if (!item) return `<header class="inspector-empty-head"><div><span>会话工具</span><b>文件与转发</b></div><div class="inspector-head-actions"><button data-toggle-inspector title="收起文件管理">${icon('expand', 15)}</button></div></header><div class="inspector-empty">选择终端窗格后可管理文件、转发和通知。</div>`;
   const tabs = [['files', '文件', 'folder'], ['forwards', '转发', 'forward'], ['notifications', '通知', 'bell']];
-  return `<header><div><span>会话工具</span><b>${esc(item.session.name)}</b></div><code>${esc(item.name)}</code></header><nav>${tabs.map(([key, label, glyph]) => `<button data-inspector-tab="${key}" class="${state.inspector.tab === key ? 'active' : ''}">${icon(glyph, 13)}${label}</button>`).join('')}</nav><div class="inspector-body">${state.inspector.loading ? '<div class="inspector-empty">加载中…</div>' : inspectorBody(item.session)}</div>`;
+  return `<header><div><span>会话工具</span><b>${esc(item.session.name)}</b></div><div class="inspector-head-actions"><code>${esc(item.name)}</code><button data-toggle-inspector title="收起文件管理">${icon('expand', 15)}</button></div></header><nav>${tabs.map(([key, label, glyph]) => `<button data-inspector-tab="${key}" class="${state.inspector.tab === key ? 'active' : ''}">${icon(glyph, 13)}${label}</button>`).join('')}</nav><div class="inspector-body">${state.inspector.loading ? '<div class="inspector-empty">加载中…</div>' : inspectorBody(item.session)}</div>`;
 }
 
 function inspectorBody(session) {
@@ -378,16 +459,36 @@ function modal() {
   return `<div class="modal-backdrop"><form class="modal ${dialog.type === 'connection' ? 'wide' : ''}" data-form="${esc(dialog.type)}"><header><div><span>${eyebrow}</span><h2>${esc(title)}</h2></div><button type="button" class="icon-btn" data-close>×</button></header>${body}<footer>${footer}</footer></form></div>`;
 }
 
+function sessionContextMenu() {
+  const menu = state.contextMenu;
+  const session = menu && sessionByID(menu.sessionID);
+  if (!session) return '';
+  const firstShell = (session.shells || []).find(shell => shell.status === 'running') || (session.shells || [])[0];
+  return `<div class="session-context-menu" role="menu" style="left:${menu.x}px;top:${menu.y}px" data-session-menu="${esc(session.id)}"><header>${dot(session.status)}<span><b>${esc(session.name)}</b><small>${esc(session.ssh_endpoint || session.mode)}</small></span></header><button role="menuitem" data-context-action="open" ${firstShell ? `data-shell="${esc(firstShell.id)}"` : ''}>${icon('external', 15)}<span>${firstShell ? '在工作台打开' : '新建 Shell'}</span></button><button role="menuitem" data-context-action="new-shell">${icon('plus', 15)}<span>新建 Shell</span></button><button role="menuitem" data-context-action="details">${icon('sessions', 15)}<span>查看会话详情</span></button><button role="menuitem" data-context-action="rename">${icon('edit', 15)}<span>重命名</span></button><button role="menuitem" data-context-action="copy-uri">${icon('copy', 15)}<span>复制资源地址</span><kbd>termcp://</kbd></button><hr><button role="menuitem" data-context-action="terminate" class="warning" ${session.status === 'running' ? '' : 'disabled'}>${icon('trash', 15)}<span>结束并归档</span></button><button role="menuitem" data-context-action="purge" class="danger">${icon('trash', 15)}<span>永久删除</span></button></div>`;
+}
+
+function coreIndicator() {
+  const status = state.data.core.running ? 'running' : 'error';
+  const statusText = state.data.core.running ? 'Core 运行中' : 'Core 已停止';
+  return `<div class="core-indicator" id="core-indicator"><button data-section="core" aria-label="${statusText}">${dot(status)}<span>Core</span></button><div class="core-tooltip" role="tooltip"><header>${dot(status)}<div><b id="core-indicator-title">${statusText}</b><small>${coreMode()}</small></div></header><dl><div><dt>本机服务地址</dt><dd>${esc(state.data.core.address || '127.0.0.1:18765')}</dd></div><div><dt>终端事件通道</dt><dd id="core-channel-status">${esc(state.wsStatus)}</dd></div><div><dt>系统服务</dt><dd>${state.service.installed ? (state.service.running ? '已注册 · 运行中' : '已注册 · 已停止') : '未注册'}</dd></div><div><dt>开机自启</dt><dd>${state.service.autostart ? '已开启' : '已关闭'}</dd></div></dl><small>点击打开 Core 管理</small></div></div>`;
+}
+
 function render() {
   terminals.clear();
-  document.querySelector('#app').innerHTML = `<div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>t_</span><b>Termcp</b></div><div class="title-status" id="connection-badge">${dot(state.data.core.running ? 'running' : 'error')}<span>${state.data.core.running ? 'Core 运行中' : 'Core 已停止'}</span><small>${coreMode()}</small></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="最小化">—</button><button data-window="max" aria-label="最大化">□</button><button data-window="close" aria-label="隐藏到系统托盘">×</button></div></header><div class="body">${rail()}${explorer()}<main class="content ${state.section === 'workspace' ? 'workspace-content' : ''}">${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">重试</button></div>` : ''}<div class="content-toolbar"><span>${core.preview ? '浏览器预览 · 脱敏演示资源' : '本机 Core 数据'}</span><button class="icon-btn ${state.loading ? 'spinning' : ''}" data-action="refresh" title="刷新资源">${icon('refresh', 15)}</button></div>${content()}</main></div></div>${modal()}`;
+  const fullWidth = state.section === 'settings';
+  document.querySelector('#app').innerHTML = `<a class="skip-link" href="#main-content">跳到主要内容</a><div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>t_</span><b>Termcp</b></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="最小化">—</button><button data-window="max" aria-label="最大化窗口">□</button><button data-window="close" aria-label="隐藏到系统托盘">×</button></div></header><div class="body ${fullWidth ? 'single-content' : ''}">${rail()}${fullWidth ? '' : explorer()}<main id="main-content" class="content ${state.section === 'workspace' ? 'workspace-content' : ''} ${fullWidth ? 'settings-content' : ''}">${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">重试</button></div>` : ''}${content()}</main></div></div>${coreIndicator()}${sessionContextMenu()}${modal()}`;
   localizeDOM(document.querySelector('#app'));
   if (state.section === 'workspace') mountWorkspace();
+  if (state.section === 'settings') {
+    const preview = document.querySelector('[data-font-preview]');
+    if (preview) preview.style.fontFamily = state.appearance.fontFamily === 'system-ui' ? 'system-ui' : `"${state.appearance.fontFamily.replace(/["\\]/g, '')}", sans-serif`;
+    queueMicrotask(loadSystemFonts);
+  }
 }
 
 function updateConnectionBadge() {
-  const element = document.querySelector('#connection-badge small');
-  if (element && state.section === 'workspace') element.textContent = state.wsStatus;
+  const channel = document.querySelector('#core-channel-status');
+  if (channel) channel.textContent = state.wsStatus;
 }
 
 async function mountWorkspace() {
@@ -401,7 +502,7 @@ async function mountWorkspace() {
 }
 
 async function loadInspector() {
-  if (state.section !== 'workspace') return;
+  if (state.section !== 'workspace' || state.inspector.collapsed) return;
   const pane = activePane(); const shell = pane && shellByID(pane.shellID);
   if (!shell) return;
   state.inspector.sessionID = shell.session.id;
@@ -424,24 +525,92 @@ async function loadInspector() {
 }
 
 function openShell(shellID, sessionID) {
-  let workspace = activeWorkspace();
-  if (workspace.panes.length >= 4 && !workspace.panes.some(pane => pane.shellID === shellID)) {
-    workspace = { id: `workspace-${Date.now()}`, name: sessionByID(sessionID)?.name || 'SSH 工作台', panes: [], maximized: '' };
-    state.workspaces.push(workspace); state.activeWorkspace = workspace.id;
+  const session = sessionByID(sessionID);
+  state.closedSessionTabs.delete(sessionID);
+  let workspace = state.workspaces.find(item => item.primarySessionID === sessionID);
+  if (!workspace) {
+    workspace = { id: `session-tab-${sessionID}-${Date.now()}`, name: session?.name || 'SSH 会话', primarySessionID: sessionID, panes: [], maximized: '', layout: 'grid' };
+    state.workspaces.push(workspace);
   }
+  state.activeWorkspace = workspace.id;
   if (!workspace.panes.some(pane => pane.shellID === shellID)) workspace.panes.push({ shellID, sessionID });
+  if (workspace.panes.length > 2) workspace.layout = 'grid';
   workspace.activeShell = shellID; workspace.maximized = '';
   state.section = 'workspace'; state.selected = { type: 'shell', id: shellID };
   saveWorkspaces(); render();
 }
 
+function openSession(sessionID) {
+  const session = sessionByID(sessionID);
+  state.closedSessionTabs.delete(sessionID);
+  const shell = session?.shells?.find(item => item.status === 'running') || session?.shells?.[0];
+  if (shell) openShell(shell.id, sessionID);
+  else { state.dialog = { type: 'shell', session: sessionID }; render(); }
+}
+
+async function createSessionFromConnection(connectionName) {
+  const connection = connectionByName(connectionName);
+  if (!connection) return;
+  const sameConnection = state.data.sessions.filter(session => session.ssh_endpoint === connectionName || (connection.kind === 'internal' && session.ssh_endpoint === 'internal'));
+  const name = sameConnection.length ? `${connection.name} ${sameConnection.length + 1}` : connection.name;
+  await run('会话已创建', async () => {
+    const result = await core.api('POST', '/api/sessions', {
+      ssh_config: connection.name,
+      name,
+      command: '',
+      mode: 'pty',
+      rows: 24,
+      cols: 100,
+    });
+    await refresh({ quiet: true });
+    if (result.data?.shell_id && result.data?.session_id) openShell(result.data.shell_id, result.data.session_id);
+  }, { refresh: false });
+}
+
+function addSessionSplit(sessionID, region = 'right', sourceWorkspaceID = '', preferredShellID = '') {
+  const session = sessionByID(sessionID);
+  const workspace = activeWorkspace();
+  if (!session || !workspace) return;
+  state.closedSessionTabs.delete(sessionID);
+  const shell = (session.shells || []).find(item => item.id === preferredShellID && !workspace.panes.some(pane => pane.shellID === item.id))
+    || (session.shells || []).find(item => item.status === 'running' && !workspace.panes.some(pane => pane.shellID === item.id))
+    || (session.shells || []).find(item => !workspace.panes.some(pane => pane.shellID === item.id));
+  if (!shell) { toast('该会话没有可添加的 Shell'); return; }
+  const pane = { shellID: shell.id, sessionID: session.id };
+  if (region === 'left' || region === 'top') workspace.panes.unshift(pane);
+  else workspace.panes.push(pane);
+  workspace.layout = region === 'top' || region === 'bottom' ? 'rows' : 'columns';
+  if (workspace.panes.length > 2) workspace.layout = 'grid';
+  workspace.activeShell = shell.id;
+  workspace.maximized = '';
+  workspace.mergedSessionIDs = [...new Set([...(workspace.mergedSessionIDs || []), session.id])];
+  if (sourceWorkspaceID && sourceWorkspaceID !== workspace.id) state.workspaces = state.workspaces.filter(item => item.id !== sourceWorkspaceID);
+  state.draggedWorkspace = ''; state.draggedSession = ''; state.dropRegion = '';
+  saveWorkspaces(); render();
+}
+
+async function loadSystemFonts() {
+  if (state.systemFonts.loaded || state.systemFonts.loading) return;
+  state.systemFonts.loading = true; render();
+  try {
+    const fonts = await core.systemFonts();
+    state.systemFonts.items = Array.isArray(fonts) ? fonts : [];
+    state.systemFonts.loaded = true; state.systemFonts.error = '';
+  } catch (error) {
+    state.systemFonts.error = String(error); state.systemFonts.loaded = true;
+  } finally {
+    state.systemFonts.loading = false; render();
+  }
+}
+
 function navigateToSection(section) {
-  const allowed = new Set(['resources', 'workspace', 'sessions', 'history', 'service', 'settings']);
+  const allowed = new Set(['resources', 'workspace', 'sessions', 'history', 'service', 'core', 'settings']);
   if (!allowed.has(section)) return;
   state.section = section;
   if (section === 'history') state.selected = { type: 'history-index', id: '' };
   if (section === 'settings') state.selected = { type: 'settings', id: '' };
   if (section === 'service') state.selected = { type: 'service', id: 'local' };
+  if (section === 'core') state.selected = { type: 'core', id: 'core' };
   render();
 }
 
@@ -487,14 +656,73 @@ function confirmDialog(title, message, action, payload, confirm = '确认') {
 }
 
 document.addEventListener('click', async event => {
+  const contextAction = event.target.closest('[data-context-action]');
+  if (contextAction) {
+    const sessionID = contextAction.closest('[data-session-menu]')?.dataset.sessionMenu;
+    const session = sessionByID(sessionID);
+    const action = contextAction.dataset.contextAction;
+    state.contextMenu = null;
+    if (!session) { render(); return; }
+    if (action === 'open') {
+      const shellID = contextAction.dataset.shell;
+      if (shellID) openShell(shellID, session.id);
+      else { state.dialog = { type: 'shell', session: session.id }; render(); }
+      return;
+    }
+    if (action === 'new-shell') { state.dialog = { type: 'shell', session: session.id }; render(); return; }
+    if (action === 'details') { state.section = 'sessions'; state.selected = { type: 'session', id: session.id }; render(); return; }
+    if (action === 'rename') { state.dialog = { type: 'rename', title: '重命名会话', target: 'session', id: session.id, value: session.name }; render(); return; }
+    if (action === 'copy-uri') { try { await navigator.clipboard.writeText(`termcp://#${session.id}`); toast('已复制'); } catch { toast('复制失败'); } render(); return; }
+    if (action === 'terminate') { confirmDialog('结束会话', '所有 Shell 和端口转发都会关闭，输出会保留到历史记录。', 'terminate-session', session.id, '结束并归档'); return; }
+    if (action === 'purge') { confirmDialog('永久删除会话', '会话、消息和历史记录将永久删除。', 'purge-session', session.id, '永久删除'); return; }
+  }
+  if (state.contextMenu && !event.target.closest('.session-context-menu')) { state.contextMenu = null; document.querySelector('.session-context-menu')?.remove(); }
+  const groupToggle = event.target.closest('[data-group-toggle]');
+  if (groupToggle) {
+    const key = groupToggle.dataset.groupToggle;
+    state.collapsedGroups.has(key) ? state.collapsedGroups.delete(key) : state.collapsedGroups.add(key);
+    saveCollapsedGroups(); render(); return;
+  }
   const toggle = event.target.closest('[data-toggle]');
   if (toggle) { const key = toggle.dataset.toggle; state.expanded.has(key) ? state.expanded.delete(key) : state.expanded.add(key); render(); return; }
+  const inspectorToggle = event.target.closest('[data-toggle-inspector]');
+  if (inspectorToggle) { state.inspector.collapsed = !state.inspector.collapsed; localStorage.setItem('termcp-desktop-inspector-collapsed', state.inspector.collapsed ? '1' : '0'); render(); return; }
   const closeWorkspace = event.target.closest('[data-close-workspace]');
-  if (closeWorkspace) { event.stopPropagation(); state.workspaces = state.workspaces.filter(item => item.id !== closeWorkspace.dataset.closeWorkspace); state.activeWorkspace = state.workspaces[0]?.id || ''; saveWorkspaces(); render(); return; }
+  if (closeWorkspace) {
+    event.stopPropagation();
+    const closing = state.workspaces.find(item => item.id === closeWorkspace.dataset.closeWorkspace);
+    [closing?.primarySessionID, ...(closing?.mergedSessionIDs || [])].filter(Boolean).forEach(id => state.closedSessionTabs.add(id));
+    state.workspaces = state.workspaces.filter(item => item.id !== closeWorkspace.dataset.closeWorkspace);
+    state.activeWorkspace = state.workspaces[0]?.id || '';
+    saveWorkspaces(); render(); return;
+  }
+  const paneTarget = event.target.closest('[data-pane-activate]');
+  if (paneTarget) {
+    const workspace = activeWorkspace();
+    if (workspace.activeShell !== paneTarget.dataset.paneActivate) {
+      workspace.activeShell = paneTarget.dataset.paneActivate;
+      state.inspector.path = '/';
+      saveWorkspaces();
+      document.querySelectorAll('.terminal-pane.active').forEach(item => item.classList.remove('active'));
+      paneTarget.classList.add('active');
+      await loadInspector();
+    }
+  }
   const target = event.target.closest('button');
   if (!target) return;
   if (target.dataset.section) { navigateToSection(target.dataset.section); return; }
-  if (target.dataset.select) { const [type, ...parts] = target.dataset.select.split(':'); state.selected = { type, id: parts.join(':') }; if (type === 'history') state.historyTranscript = ''; render(); return; }
+  if (target.dataset.connectionProfile) {
+    clearTimeout(connectionClickTimer);
+    const name = target.dataset.connectionProfile;
+    connectionClickTimer = setTimeout(() => {
+      state.section = 'resources';
+      state.selected = { type: 'connection', id: name };
+      render();
+    }, 240);
+    return;
+  }
+  if (target.dataset.select) { const [type, ...parts] = target.dataset.select.split(':'); state.selected = { type, id: parts.join(':') }; if (type === 'history') state.historyTranscript = ''; if (type === 'core') state.section = 'resources'; render(); return; }
+  if (target.dataset.openSession) { openSession(target.dataset.openSession); return; }
   if (target.dataset.openShell) { openShell(target.dataset.openShell, target.dataset.session); return; }
   if (target.dataset.workspace) { state.activeWorkspace = target.dataset.workspace; state.section = 'workspace'; saveWorkspaces(); render(); return; }
   if (target.dataset.copy !== undefined) { try { await navigator.clipboard.writeText(target.dataset.copy); toast('已复制'); } catch { toast('复制失败'); } return; }
@@ -503,7 +731,7 @@ document.addEventListener('click', async event => {
   if (target.dataset.activePane) { const workspace = activeWorkspace(); workspace.activeShell = target.dataset.activePane; state.inspector.path = '/'; saveWorkspaces(); render(); return; }
   if (target.dataset.maxPane) { const workspace = activeWorkspace(); workspace.maximized = workspace.maximized ? '' : target.dataset.maxPane; saveWorkspaces(); render(); return; }
   if (target.dataset.removePane) { const workspace = activeWorkspace(); workspace.panes = workspace.panes.filter(pane => pane.shellID !== target.dataset.removePane); workspace.maximized = ''; workspace.activeShell = workspace.panes[0]?.shellID || ''; saveWorkspaces(); render(); return; }
-  if (target.dataset.inspectorTab) { state.inspector.tab = target.dataset.inspectorTab; state.inspector.data = null; render(); return; }
+  if (target.dataset.inspectorTab) { state.inspector.tab = target.dataset.inspectorTab; state.inspector.data = null; if (state.inspector.collapsed) { state.inspector.collapsed = false; localStorage.setItem('termcp-desktop-inspector-collapsed', '0'); } render(); return; }
   if (target.dataset.fileBrowse !== undefined) { const input = document.querySelector('[data-file-path]'); state.inspector.path = input?.value.trim() || '/'; await loadInspector(); return; }
   if (target.dataset.fileUp !== undefined) { state.inspector.path = parentPath(state.inspector.path); await loadInspector(); return; }
   if (target.dataset.fileOpen) { if (target.dataset.isDir === '1') { state.inspector.path = target.dataset.fileOpen; await loadInspector(); } else await downloadFile(target.dataset.fileOpen); return; }
@@ -537,12 +765,7 @@ document.addEventListener('click', async event => {
   if (action === 'rename-session') { const item = sessionByID(target.dataset.id); state.dialog = { type: 'rename', title: '重命名会话', target: 'session', id: item.id, value: item.name }; render(); return; }
   if (action === 'open-selected-shell') { openShell(target.dataset.shell, target.dataset.session); return; }
   if (action === 'close-shell') { confirmDialog('关闭 Shell', '当前 Shell 进程将结束；其他 Shell 和 SSH 连接保持运行。', 'close-shell', target.dataset.shell, '关闭 Shell'); return; }
-  if (action === 'new-workspace') { const workspace = { id: `workspace-${Date.now()}`, name: `工作区 ${state.workspaces.length + 1}`, panes: [], maximized: '' }; state.workspaces.push(workspace); state.activeWorkspace = workspace.id; saveWorkspaces(); render(); return; }
-  if (action === 'rename-workspace') { const workspace = activeWorkspace(); state.dialog = { type: 'rename', title: '重命名工作区', target: 'workspace', id: workspace.id, value: workspace.name }; render(); return; }
-  if (action === 'add-pane') { state.dialog = { type: 'add-pane' }; render(); return; }
-  if (action === 'layout-columns') { const workspace = activeWorkspace(); workspace.layout = 'columns'; workspace.maximized = ''; saveWorkspaces(); render(); return; }
-  if (action === 'layout-rows') { const workspace = activeWorkspace(); workspace.layout = 'rows'; workspace.maximized = ''; saveWorkspaces(); render(); return; }
-  if (action === 'tile-panes') { const workspace = activeWorkspace(); workspace.layout = 'grid'; workspace.maximized = ''; saveWorkspaces(); render(); return; }
+  if (action === 'add-pane') { state.dialog = { type: 'add-pane', direction: 'right' }; render(); return; }
   if (action === 'new-directory') { state.dialog = { type: 'directory' }; render(); return; }
   if (action === 'new-forward') { state.dialog = { type: 'forward', session: state.inspector.sessionID }; render(); return; }
   if (action === 'edit-history') { state.dialog = { type: 'history', item: historyByID(target.dataset.id) }; render(); return; }
@@ -558,18 +781,25 @@ document.addEventListener('click', async event => {
   }
 });
 
+document.addEventListener('dblclick', async event => {
+  const connection = event.target.closest('[data-connection-profile]');
+  if (!connection) return;
+  event.preventDefault();
+  clearTimeout(connectionClickTimer);
+  await createSessionFromConnection(connection.dataset.connectionProfile);
+});
+
 document.addEventListener('input', event => {
   if (event.target.matches('[data-filter]')) { state.filter = event.target.value; const treeElement = document.querySelector('.tree-scroll'); if (treeElement) { treeElement.innerHTML = tree(state.filter.trim().toLowerCase()); localizeDOM(treeElement); } }
   if (event.target.matches('[data-history-query]')) state.historyQuery = event.target.value;
-  if (event.target.matches('[data-split-ratio]')) {
-    const workspace = activeWorkspace(); workspace.ratio = Number(event.target.value);
-    document.querySelector('.terminal-workspace')?.style.setProperty('--split-ratio', `${workspace.ratio}%`);
-    const label = event.target.nextElementSibling; if (label) label.textContent = `${workspace.ratio}%`;
-    saveWorkspaces();
-  }
 });
 
 document.addEventListener('change', async event => {
+  if (event.target.matches('[data-appearance]')) {
+    state.appearance = setAppearance({ [event.target.dataset.appearance]: event.target.value });
+    render();
+    return;
+  }
   if (event.target.matches('[data-language]')) {
     const language = setLanguage(event.target.value);
     try { await core.setLanguage(language); } catch { /* The DOM locale remains usable if a legacy backend lacks this bridge. */ }
@@ -585,7 +815,95 @@ document.addEventListener('change', async event => {
 document.addEventListener('keydown', async event => {
   if (event.key === 'Enter' && event.target.matches('[data-file-path]')) { event.preventDefault(); state.inspector.path = event.target.value.trim() || '/'; await loadInspector(); }
   if (event.key === 'Enter' && event.target.matches('[data-history-query]')) { event.preventDefault(); await searchHistory(); }
-  if (event.key === 'Escape' && state.dialog) { state.dialog = null; render(); }
+  if (event.key === 'Escape' && (state.dialog || state.contextMenu)) { state.dialog = null; state.contextMenu = null; render(); }
+  if (state.section !== 'workspace' || event.target.matches('input,textarea,select')) return;
+  if (event.altKey && event.shiftKey && (event.key === 'ArrowRight' || event.key === 'ArrowDown')) {
+    event.preventDefault();
+    state.dialog = { type: 'add-pane', direction: event.key === 'ArrowDown' ? 'bottom' : 'right' };
+    render();
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 't') {
+    event.preventDefault();
+    const session = workspaceSession(activeWorkspace());
+    if (session) { state.dialog = { type: 'shell', session: session.id }; render(); }
+  }
+});
+
+document.addEventListener('contextmenu', event => {
+  const node = event.target.closest('[data-session-context]');
+  if (!node) return;
+  event.preventDefault();
+  const width = 244; const height = 326; const margin = 8;
+  state.contextMenu = {
+    sessionID: node.dataset.sessionContext,
+    x: Math.max(margin, Math.min(event.clientX, window.innerWidth - width - margin)),
+    y: Math.max(margin, Math.min(event.clientY, window.innerHeight - height - margin)),
+  };
+  render();
+});
+
+document.addEventListener('dragstart', event => {
+  const tab = event.target.closest('[data-workspace-drag]');
+  const sessionNode = event.target.closest('[data-session-drag]');
+  if (!tab && !sessionNode) return;
+  state.draggedWorkspace = tab?.dataset.workspaceDrag || '';
+  state.draggedSession = tab?.dataset.sessionDrag || sessionNode?.dataset.sessionDrag || '';
+  (tab || sessionNode).classList.add('dragging');
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('application/x-termcp-session', state.draggedSession);
+  event.dataTransfer.setData('text/plain', state.draggedWorkspace || state.draggedSession);
+});
+
+document.addEventListener('dragover', event => {
+  const dropZone = event.target.closest('[data-session-drop-zone]');
+  if (dropZone && state.draggedSession) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    const rect = dropZone.getBoundingClientRect();
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
+    const region = x < .28 ? 'left' : x > .72 ? 'right' : y < .38 ? 'top' : y > .62 ? 'bottom' : (rect.width >= rect.height ? 'right' : 'bottom');
+    state.dropRegion = region;
+    dropZone.classList.remove('drop-left', 'drop-right', 'drop-top', 'drop-bottom');
+    dropZone.classList.add(`drop-${region}`);
+    const label = dropZone.querySelector('.session-drop-hint span');
+    if (label) label.textContent = region === 'top' ? t('在上方分屏') : region === 'bottom' ? t('在下方分屏') : region === 'left' ? t('在左侧分屏') : t('在右侧分屏');
+    return;
+  }
+  const tab = event.target.closest('[data-workspace-drag]');
+  if (!tab || !state.draggedWorkspace || tab.dataset.workspaceDrag === state.draggedWorkspace) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.workspace-tab.drop-target').forEach(item => item.classList.remove('drop-target'));
+  tab.classList.add('drop-target');
+});
+
+document.addEventListener('drop', event => {
+  const dropZone = event.target.closest('[data-session-drop-zone]');
+  if (dropZone && state.draggedSession) {
+    event.preventDefault();
+    addSessionSplit(state.draggedSession, state.dropRegion || 'right', state.draggedWorkspace);
+    return;
+  }
+  const tab = event.target.closest('[data-workspace-drag]');
+  const sourceID = state.draggedWorkspace || event.dataTransfer.getData('text/plain');
+  const targetID = tab?.dataset.workspaceDrag;
+  if (!sourceID || !targetID || sourceID === targetID) return;
+  event.preventDefault();
+  const sourceIndex = state.workspaces.findIndex(item => item.id === sourceID);
+  const targetIndex = state.workspaces.findIndex(item => item.id === targetID);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+  const [moved] = state.workspaces.splice(sourceIndex, 1);
+  state.workspaces.splice(targetIndex, 0, moved);
+  state.draggedWorkspace = '';
+  saveWorkspaces();
+  render();
+});
+
+document.addEventListener('dragend', () => {
+  state.draggedWorkspace = ''; state.draggedSession = ''; state.dropRegion = '';
+  document.querySelectorAll('.dragging,.workspace-tab.drop-target,.drop-left,.drop-right,.drop-top,.drop-bottom').forEach(item => item.classList.remove('dragging', 'drop-target', 'drop-left', 'drop-right', 'drop-top', 'drop-bottom'));
 });
 
 document.addEventListener('submit', async event => {
@@ -629,7 +947,7 @@ document.addEventListener('submit', async event => {
     return;
   }
   if (type === 'directory') { state.dialog = null; await run('目录已创建', () => core.api('POST', `/api/sessions/${encode(state.inspector.sessionID)}/files/dir?path=${encode(data.get('path'))}`), { refresh: false }); await loadInspector(); return; }
-  if (type === 'add-pane') { state.dialog = null; const shellID = data.get('shell'); const item = shellByID(shellID); if (item) openShell(shellID, item.session.id); }
+  if (type === 'add-pane') { const direction = state.dialog?.direction || 'right'; state.dialog = null; const shellID = data.get('shell'); const item = shellByID(shellID); if (item) addSessionSplit(item.session.id, direction, '', shellID); }
 });
 
 async function executeConfirmed(action, payload) {
