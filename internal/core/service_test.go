@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestServiceStartsIntegratedCore(t *testing.T) {
@@ -48,7 +49,7 @@ func TestServiceStartsIntegratedCore(t *testing.T) {
 	}
 }
 
-func TestServiceAttachesToExistingCore(t *testing.T) {
+func TestServiceAttachesToExistingLocalCore(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/sessions" {
 			http.NotFound(w, r)
@@ -76,12 +77,29 @@ func TestServiceAttachesToExistingCore(t *testing.T) {
 		t.Fatal(err)
 	}
 	if status := service.Status(); !status.Running || status.Managed {
-		t.Fatalf("expected external Core attachment, got %+v", status)
+		t.Fatalf("expected local Core attachment, got %+v", status)
 	}
 	if err := service.Stop(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := http.Get(server.URL + "/api/sessions"); err != nil {
-		t.Fatalf("stopping the GUI service stopped the external Core: %v", err)
+		t.Fatalf("stopping the GUI attachment stopped the local Core: %v", err)
+	}
+}
+
+func TestAttachWaitsForLocalServiceWithoutStartingIntegratedCore(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	service := New("127.0.0.1", port)
+	if err := service.Attach(120 * time.Millisecond); err == nil {
+		t.Fatal("Attach succeeded without a service endpoint")
+	}
+	status := service.Status()
+	if status.Running || status.Managed || status.State != "error" {
+		t.Fatalf("Attach started or reported an integrated Core: %+v", status)
 	}
 }

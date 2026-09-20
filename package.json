@@ -1,8 +1,8 @@
 {
-  "name": "termcp-gui",
+  "name": "termcp-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Wails desktop control plane and SSH workspace for termcp",
+  "description": "Termcp desktop manager and SSH workspace",
   "scripts": {
     "dev": "npm --prefix frontend run build && node scripts/serve.mjs",
     "dev:wails": "go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 dev",

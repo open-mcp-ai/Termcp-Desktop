@@ -6,3 +6,11 @@ build/bin/
 frontend/wailsjs/
 .DS_Store
 artifacts/
+.termcp/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx

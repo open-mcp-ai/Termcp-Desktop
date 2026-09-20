@@ -1,15 +1,15 @@
-# termcp-gui 产品原型设计
+# Termcp-Desktop 产品原型设计
 
 ## 产品定位
 
-termcp-gui 是 termcp core 的独立图形客户端与本地服务管理端。人通过 GUI、Agent 通过 MCP、程序通过 REST 操作同一个 core 的持久会话。
+Termcp 是 termcp core 的独立图形客户端与本地服务管理端。人通过 GUI、Agent 通过 MCP、程序通过 REST 操作同一个 core 的持久会话。
 
 产品同时承担 Core 管理端与 SSH 管理工具的角色。默认体验：打开 SSH 工作台 → 连接收藏主机或进入已有会话 → 用标签、分屏和平铺组织 Shell → 管理焦点窗格所属会话的文件与转发。Core 管理始终可从侧栏进入。
 
 GUI 应提供两种接入模式：
 
 - GUI 托管：由桌面进程管理层启动本地 core，持有其进程句柄，管理退出、日志与启动参数。
-- 外部接入：连接用户已有的本机或远程 core，仅通过服务接口管理资源；其进程启停、升级由宿主管理。
+- 系统服务：把本机 core 注册给操作系统，GUI 负责注册、卸载、启停、重启与开机自启。
 
 核心能力和数据仍由 core 持有，GUI 不应创建另一套会话后端。关闭 GUI 与停止 core 应是两个独立动作；正式产品需定义托管进程在关闭窗口、退出应用与异常退出时的行为。
 
@@ -35,55 +35,54 @@ GUI 应提供两种接入模式：
 
 视图中将会话按连接配置分组。这是导航分组，不意味着连接配置自己持有 SSH Client；实际资源关系仍是每个会话持有一条连接，Shell 和转发属于会话。所有 Shell 平等，不设置“主 Shell / 子 Shell”产品层级。
 
-优点：适合多个实例与环境，资源所属关系清晰。代价：资源数量增加时需要折叠、搜索、收藏及空状态；原型只演示本地实例和外部未连接状态，未实现多个在线实例。
+优点：连接、会话和 Shell 的资源所属关系清晰。资源数量增加时通过折叠、搜索、收藏及空状态保持可读性；Core 始终是本机单实例。
 
 ## 推荐组合
 
-采用方案 01 的导航与 Core 管理，方案 02 的终端操作区。方案 03 的资源树作为导航视图切换，在接入多个 core 后引入。
+采用方案 01 的导航与 Core 管理，方案 02 的终端操作区，以及方案 03 的资源树组织连接、会话与 Shell；Core 保持本机单实例。
 
-MVP 同时提供单本地 core 管理、SSH 主机入口和可分屏的终端工作台。多 core、监控采集和桌面系统集成分阶段接入。
+当前产品提供单一本机 Core 管理、独立系统服务板块、SSH 主机入口和可分屏的终端工作台。监控采集与安装包发布继续分阶段接入。
 
 ## WebUI 能力迁移矩阵
 
 依据当前本地 core 的 README、docs/api.md、internal/webui/handler.go、ws.go 与前端资源梳理。下列路径用于正式接入；原型没有请求这些接口。
 
-| 现有能力 | GUI 入口 | Core 接口 / 实现方式 | 当前原型 |
+| 现有能力 | GUI 入口 | Core 接口 / 实现方式 | 实现状态 |
 | --- | --- | --- | --- |
-| 会话列表、新建、改名 | 会话 | GET/POST /api/sessions；PATCH /api/sessions/{id} | 列表、新建、查找；运行会话改名待接入 |
-| 结束会话并保留历史 | 会话 / 工作台 | POST /api/sessions/{id}/terminate | 模拟结束与归档 |
-| 删除会话并清理历史 | 会话管理 | DELETE /api/sessions/{id}，与 terminate 语义分开 | 归档删除模拟；运行会话永久清理待接入 |
-| 多 Shell 创建、关闭 | 工作台 | GET/POST /api/sessions/{id}/shells；DELETE /api/shells/{id} | 模拟创建、关闭、退出状态 |
-| PTY 输入、输出、尺寸变化 | 工作台 | WebSocket /api/ui/ws；使用真实 Shell ID，协议见 ws.go | 文本模拟；xterm、PTY resize、真实流待接入 |
-| 会话变更、人工通知推送 | 全局 / 工作台 | 同一 WebSocket 的 sessions / notify_user 消息 | 演示提醒；真实推送待接入 |
-| 多终端分屏 / 平铺 | 工作台布局 | GUI 嵌套布局树 + 多 Shell 订阅 + 各窗格 resize | 嵌套左右/上下分屏、平铺、调整比例、最大化/收起；真实订阅与 resize 待接入 |
-| 连接模板、SSH 配置 CRUD / 测试 | 连接配置 | /api/connection-templates；/api/connections；POST /api/connections/test | 新建、编辑、详情、删除、模拟测试、分组收藏和跳板引用；配置复制待接入 |
-| 本机连接与能力门控 | 连接配置 / 设置 | internal 配置；--no-internal | 演示配置与开关 |
-| 浏览文件、上传下载、重命名、删除、建目录 | 会话文件页 | /api/sessions/{id}/files 及其 download/upload/dir 路由 | 预览、建目录、添加演示文件；完整操作待接入 |
-| Local / Remote / Dynamic 转发 | 会话转发页 | GET/POST /api/sessions/{id}/forwards；DELETE /api/forwards/{id} | 模拟创建和关闭 |
-| 通知规则查看与移除 | 通知规则 | GET /api/notifications；DELETE /api/notifications/{id} | 模拟列表与移除；GUI 不创建规则 |
-| 历史、正文、搜索、改名、标签、备注 | 历史记录 | /api/history；/api/history/search；PATCH /api/history/{id}；transcript | 元数据过滤、改名/标签、模拟正文；正文搜索/备注/分页待接入 |
-| 历史 PNG 截图 | 历史输出 | GET /api/history/{id}/screenshot | 未实现 |
-| MCP / REST 配置速查 | API / MCP | HTTP /stream；SSE /sse；REST /api/* | 可复制示例 |
-| 资源 URL 复制 | 工作台 / 配置 | termcp://配置名；termcp://#会话ID；termcp://#会话ID:N | 演示会话与 Shell URL；N 按 core 返回的 Shell 列表索引生成 |
-| 静态 Token 鉴权 | Core 接入 / 设置 | Bearer、Basic 或 cookie，参照 internal/auth | 输入与校验模拟；凭据不保存 |
+| 会话列表、新建、改名 | 会话 | GET/POST /api/sessions；PATCH /api/sessions/{id} | 已接入 |
+| 结束会话并保留历史 | 会话 / 工作台 | POST /api/sessions/{id}/terminate | 已接入 |
+| 删除会话并清理历史 | 会话管理 | DELETE /api/sessions/{id}，与 terminate 语义分开 | 已接入 |
+| 多 Shell 创建、关闭 | 工作台 | GET/POST /api/sessions/{id}/shells；DELETE /api/shells/{id} | 已接入 |
+| PTY 输入、输出、尺寸变化 | 工作台 | WebSocket /api/ui/ws；使用真实 Shell ID，协议见 ws.go | xterm、历史恢复、输入和 resize 已接入 |
+| 会话变更、人工通知推送 | 全局 / 工作台 | 同一 WebSocket 的 sessions / notify_user 消息 | 已接入 |
+| 多终端分屏 / 平铺 | 工作台布局 | 多 Shell 订阅 + 各窗格 resize | 四窗格、左右/上下/平铺、比例、最大化和持久化已完成 |
+| 连接模板、SSH 配置 CRUD / 测试 | 连接配置 | /api/connection-templates；/api/connections；POST /api/connections/test | 已接入 |
+| 本机连接 | 连接配置 | internal 配置 | 已接入 |
+| 浏览文件、上传下载、重命名、删除、建目录 | 会话文件页 | /api/sessions/{id}/files 及 download/upload/dir 路由 | 已接入 |
+| Local / Remote / Dynamic 转发 | 会话转发页 | GET/POST /api/sessions/{id}/forwards；DELETE /api/forwards/{id} | 已接入 |
+| 通知规则查看与移除 | 通知规则 | GET /api/notifications；DELETE /api/notifications/{id} | 已接入；规则继续由 MCP 创建 |
+| 历史、正文、搜索、改名、标签、备注 | 历史记录 | /api/history；/api/history/search；PATCH；transcript | 已接入 |
+| 历史 PNG 截图 | 历史输出 | GET /api/history/{id}/screenshot | 已接入原生保存对话框 |
+| MCP / REST 配置速查 | API / MCP | HTTP /stream；SSE /sse；REST /api/* | 已接入复制配置 |
+| 资源 URL | 工作台 / 配置 | termcp://#会话ID；termcp://#会话ID:N | 会话与 Shell 详情已展示 |
+| API 安全边界 | Wails API bridge | 仅允许当前本机 Core 的 `/api/` 路径与指定方法 | 已接入并测试 |
 
 当前 core 的 REST/WS 接口位于 internal/webui。独立 GUI 替换网页静态资源时，不能一并移除该包注册的 API 与 WebSocket 服务。
 
 ## Core 管理新增能力
 
-当前 API 未提供进程生命周期、版本协商、安装/升级或进程日志端点。不能假设存在 /api/core/start 或 /api/health。
+Core REST API 不负责进程生命周期。GUI 通过桌面层完成服务管理，不虚构 `/api/core/start` 或 `/api/health`。
 
 本地桌面管理层需要补充：
 
-1. 定位/导入 core 二进制，校验平台与可执行性，读取可用版本信息。
-2. 创建托管进程，捕获 stdout/stderr，检测端口冲突、退出码与启动失败。
-3. 在启动后利用已有 API 探测可用性，区分未运行、连接失败、认证失败和版本不兼容。
-4. 持有托管进程身份，仅对该进程实施启停；发现已有服务时转为外部接入。
-5. 保存实例元数据、启动参数与最近访问状态；正式版认证信息进入系统凭据库。
-6. 评估重启影响后停止进程，应用参数，再启动；旧 SSH 连接不自动恢复。
-7. 后续版本支持安装/升级、数据备份、迁移与回滚，当前原型不模拟成功升级。
+1. 同一程序提供 Wails 桌面入口与 `--core-service` 无窗口入口。
+2. 未注册服务时托管进程内 Core；注册后只附着本机服务 Core。
+3. 启动后通过现有 API 探测就绪状态，并在界面区分运行、停止和错误。
+4. macOS 使用 LaunchAgent，Linux 使用 systemd 用户服务，Windows 使用 SCM 与专用虚拟账户。
+5. 重启和停止保留 Core 原有会话归档语义；卸载服务后立即恢复应用内 Core。
+6. 后续版本继续补充安装升级、数据备份、迁移与回滚。
 
-建议将 GUI 分为视图层、core API 适配层、桌面进程管理层。当前原型可独立审阅；原生实现主推 Rust + GPUI 与 Go core，另评估 Go + Fyne。原型 HTML 不作为原生技术选型。
+实现分为视图层、Core API 适配层和桌面生命周期层，桌面技术栈固定为 Go + Wails v2。
 
 ## 状态与交互边界
 
@@ -93,9 +92,9 @@ MVP 同时提供单本地 core 管理、SSH 主机入口和可分屏的终端工
 - PTY Shell 自然退出保留只读输出，会话仍可创建 Shell。手动关闭直接移除 Shell。
 - SSH 断线应展示 exited/只读状态、保留输出，并允许新建同配置会话；不能把它画成自动恢复的会话。
 - 文件和转发仅对活跃连接可操作；历史视图只读，不提供活动文件/转发工具。
-- 外部 core 未连接时不展示其会话数据。实际多 core 数据需要独立缓存和实例标识，不能混用 Session ID。
+- Core 停止时保留服务管理界面，资源数据在本机 API 恢复后重新加载。
 - 凭据不可读回；原型字段内容不存入 localStorage、文件或日志。
-- core 停止期间 GUI 不假设能读取其远程历史；重新连接后从持久化接口加载。
+- Core 停止期间 GUI 不假设能读取历史；本机 API 恢复后从持久化接口重新加载。
 
 ## 原型验证
 
