@@ -4,9 +4,24 @@ const bridge = {
   available: () => Boolean(window.go?.main?.App),
   call(name, ...args) {
     const fn = window.go?.main?.App?.[name];
-    return fn ? fn(...args) : Promise.reject(new Error('Wails bridge unavailable'));
+    if (!fn) return Promise.reject(new Error('Wails bridge unavailable'));
+    let result;
+    try { result = fn(...args); } catch (error) {
+      if (name !== 'LogFrontend') reportFrontend('error', 'Wails binding threw', `${name}: ${String(error)}`);
+      return Promise.reject(error);
+    }
+    return Promise.resolve(result).catch(error => {
+      if (name !== 'LogFrontend') reportFrontend('error', 'Wails binding rejected', `${name}: ${String(error)}`);
+      throw error;
+    });
   },
 };
+
+function reportFrontend(level, message, details = '') {
+  const logger = window.go?.main?.App?.LogFrontend;
+  if (logger) Promise.resolve(logger(level, String(message), String(details))).catch(() => {});
+  else if (level === 'error') console.error(message, details);
+}
 
 const now = new Date().toISOString();
 const demo = {
@@ -42,7 +57,7 @@ const demoService = {
   pid: 2841,
   label: 'ai.openmcp.termcp.desktop.core',
   definition: '~/Library/LaunchAgents/ai.openmcp.termcp.desktop.core.plist',
-  log_path: '~/.termcp/logs/termcp-desktop-core.log',
+  log_path: '~/.termcp/logs',
   data_dir: '~/.termcp',
   executable: '/Applications/Termcp-Desktop.app/Contents/MacOS/Termcp',
   description: 'macOS LaunchAgent',
@@ -154,6 +169,7 @@ function demoAPI(method, rawPath, body) {
 export const core = {
   bridge,
   preview: !bridge.available(),
+  log(level, message, details = '') { reportFrontend(level, message, details); },
   async snapshot() {
     return bridge.available() ? bridge.call('GetSnapshot') : clone(demo);
   },

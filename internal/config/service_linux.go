@@ -27,7 +27,7 @@ func (m *linuxManager) unitPath() string {
 }
 
 func (m *linuxManager) logPath() string {
-	return "journalctl --user -u " + Label + ".service"
+	return filepath.Join(m.home, ".termcp", "logs")
 }
 
 func (m *linuxManager) Status() (Status, error) {

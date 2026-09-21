@@ -24,7 +24,7 @@ export const state = {
   closedSessionTabs: persistedWorkspace.closedSessionTabs,
   collapsedGroups: persistedWorkspace.collapsedGroups,
   activeWorkspace: persistedWorkspace.activeWorkspace,
-  inspector: { tab: 'files', path: '/', data: null, loading: false, error: '', sessionID: '', collapsed: localStorage.getItem('termcp-desktop-inspector-collapsed') === '1' },
+  inspector: { tab: 'files', path: '/', data: null, loading: false, error: '', loadedKey: '', sessionID: '', collapsed: localStorage.getItem('termcp-desktop-inspector-collapsed') === '1' },
   historyQuery: '',
   historyTranscript: '',
   wsStatus: core.preview ? 'preview' : 'connecting',

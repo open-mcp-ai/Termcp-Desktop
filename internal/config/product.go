@@ -8,10 +8,12 @@ import (
 )
 
 const (
-	ProductName    = "Termcp"
-	ProjectName    = "Termcp-Desktop"
-	ProductVersion = "0.1.0"
+	ProductName = "Termcp"
+	ProjectName = "Termcp-Desktop"
 )
+
+// ProductVersion may be replaced at release build time with Go's -X linker flag.
+var ProductVersion = "0.1.1"
 
 // DataDir returns the resolved termcp data directory for this process.
 func DataDir() string {

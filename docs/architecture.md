@@ -16,6 +16,8 @@ flowchart TB
     DAEMON --> SSH
     DAEMON --> DATA
     TRAY[系统托盘\nCore / 服务状态与快捷操作] --> APP
+    APP --> LOG[~/.termcp/logs\n结构化日志 / 14 天保留]
+    API --> LOG
 ```
 
 界面不重新实现 SSH。它只编排 termcp 的连接配置和会话资源。这样 MCP、WebUI 和 GUI 看到同一批会话、Shell、历史与转发。
@@ -29,6 +31,12 @@ flowchart TB
 3. 已注册服务时，GUI 只附着本机 API；关闭桌面窗口不停止服务进程。
 4. 卸载服务时，先停止服务、移除定义，再立即恢复进程内 Core，保证桌面端继续可用。
 5. Core 就绪后，资源管理器从 `/api/connections`、`/api/sessions`、`/api/history`、`/api/forwards` 生成快照。
+
+所有 Wails 绑定、Core 生命周期、系统服务操作、GUI 到 Core 的出站请求，以及 Core 的入站 HTTP 接口共享结构化日志字段。日志不记录请求正文、凭据和查询参数值；单文件 10 MiB 或跨日轮转，保留 14 天。
+
+## 工作台渲染生命周期
+
+应用外壳可以按状态重新渲染，但 xterm 实例不随页面 DOM 销毁。渲染前终端 DOM 被移入内存片段，渲染后挂载到新的活动窗格；不活动会话继续保留滚动缓冲和 WebSocket watch。只有对应 Shell 从 Core 快照中消失时才释放实例。文件面板按会话、标签和路径缓存，并丢弃快速切换产生的过期异步响应。
 
 平台服务后端分别为 macOS LaunchAgent、Linux systemd 用户服务和 Windows Service Control Manager。Windows 的服务入口使用 SCM 控制分派器处理 Stop 与 Shutdown，以专用的 `NT SERVICE\\termcp-desktop-core` 虚拟账户运行，只授予它访问当前 Core 数据目录的权限，并在需要修改 SCM 时请求 UAC；Linux/macOS 使用 SIGTERM 完成有序关闭。
 

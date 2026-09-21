@@ -30,7 +30,13 @@ export class TerminalController {
 
   async connect() {
     if (this.core.preview || this.disposed) return;
-    const url = await this.core.websocketURL();
+    let url;
+    try {
+      url = await this.core.websocketURL();
+    } catch (error) {
+      this.hooks.log?.('error', 'Terminal WebSocket URL failed', String(error));
+      return;
+    }
     if (!url || this.disposed) return;
     if (this.ws) { try { this.ws.close(); } catch {} }
     const ws = new WebSocket(url);
@@ -40,11 +46,15 @@ export class TerminalController {
       if (this.ws !== ws) return;
       this.backoff = 800;
       this.hooks.status?.('connected');
+      this.hooks.log?.('debug', 'Terminal WebSocket connected', 'Core event channel is ready');
       for (const id of this.wanted) this.send({ type: 'watch_add', id });
     };
     ws.onmessage = event => {
       let message;
-      try { message = JSON.parse(event.data); } catch { return; }
+      try { message = JSON.parse(event.data); } catch (error) {
+        this.hooks.log?.('warn', 'Invalid terminal WebSocket message', String(error));
+        return;
+      }
       if (message.type === 'terminal') this.instances.get(message.id)?.term.write(base64ToBytes(message.d));
       if (message.type === 'terminal_done') {
         const instance = this.instances.get(message.id);
@@ -56,11 +66,12 @@ export class TerminalController {
       if (message.type === 'sessions') this.hooks.sessions?.(message);
       if (message.type === 'ui_notify') this.hooks.notify?.(message);
     };
-    ws.onerror = () => {};
-    ws.onclose = () => {
+    ws.onerror = () => { this.hooks.log?.('warn', 'Terminal WebSocket error', 'The event channel reported an error'); };
+    ws.onclose = event => {
       if (this.ws !== ws || this.disposed) return;
       this.ws = null;
       this.hooks.status?.('disconnected');
+      this.hooks.log?.('warn', 'Terminal WebSocket disconnected', `code=${event.code}`);
       clearTimeout(this.retry);
       this.retry = setTimeout(() => this.connect(), this.backoff);
       this.backoff = Math.min(10000, Math.round(this.backoff * 1.8));
@@ -72,13 +83,45 @@ export class TerminalController {
   }
 
   clear() {
-    for (const [id, instance] of this.instances) {
-      this.send({ type: 'watch_remove', id });
-      instance.resize?.disconnect();
-      try { instance.term.dispose(); } catch {}
-    }
-    this.instances.clear();
+    for (const id of [...this.instances.keys()]) this.remove(id);
     this.wanted.clear();
+  }
+
+  remove(shellID) {
+    const instance = this.instances.get(shellID);
+    if (!instance) return;
+    this.send({ type: 'watch_remove', id: shellID });
+    instance.resize?.disconnect();
+    try { instance.term.dispose(); } catch {}
+    this.instances.delete(shellID);
+    this.wanted.delete(shellID);
+  }
+
+  retain(shellIDs) {
+    for (const id of this.instances.keys()) if (!shellIDs.has(id)) this.remove(id);
+  }
+
+  // Keep xterm's DOM, scrollback, selection, and WebSocket watch alive while
+  // the surrounding application shell is synchronously re-rendered.
+  detachAll() {
+    for (const instance of this.instances.values()) {
+      if (!instance.element) continue;
+      instance.resize?.disconnect();
+      const fragment = document.createDocumentFragment();
+      while (instance.element.firstChild) fragment.appendChild(instance.element.firstChild);
+      instance.fragment = fragment;
+      instance.element = null;
+    }
+  }
+
+  refreshAppearance() {
+    const appearance = terminalAppearance();
+    for (const instance of this.instances.values()) {
+      instance.term.options.fontSize = appearance.fontSize;
+      instance.term.options.fontFamily = appearance.fontFamily;
+      instance.term.options.theme = appearance.theme;
+      try { instance.fit?.fit(); } catch {}
+    }
   }
 
   selection(shellID) {
@@ -120,7 +163,13 @@ export class TerminalController {
   }
 
   async mount(shellID, element, readOnly = false) {
-    if (!element || this.instances.has(shellID) || !window.Terminal) return;
+    if (!element) return;
+    const existing = this.instances.get(shellID);
+    if (existing) {
+      this.attach(existing, element);
+      return;
+    }
+    if (!window.Terminal) return;
     const appearance = terminalAppearance();
     const term = new window.Terminal({
       cursorBlink: !readOnly,
@@ -140,11 +189,9 @@ export class TerminalController {
     }
     term.open(element);
     try { fit?.fit(); } catch {}
-    const instance = { term, fit, ended: readOnly, userReady: false, resize: null };
+    const instance = { term, fit, ended: readOnly, userReady: false, resize: null, element, fragment: null };
     this.instances.set(shellID, instance);
-    element.addEventListener('mousedown', () => { instance.userReady = true; }, { capture: true });
-    element.addEventListener('keydown', () => { instance.userReady = true; }, { capture: true });
-    element.addEventListener('paste', () => { instance.userReady = true; }, { capture: true });
+    this.bindActivity(instance, element);
     term.onData(data => {
       if (readOnly || instance.ended || !instance.userReady) return;
       this.send({ type: 'input', id: shellID, d: bytesToBase64(textEncoder.encode(data)), nl: false });
@@ -157,12 +204,13 @@ export class TerminalController {
         if (!readOnly && !instance.ended) this.send({ type: 'resize', id: shellID, rows: term.rows, cols: term.cols });
       }, 100);
     });
-    resize.observe(element);
     instance.resize = resize;
+    resize.observe(element);
     try {
       const result = await this.core.api('GET', `/api/shells/${encodeURIComponent(shellID)}/output-range?tail=1&max=524288`);
       if (result.data?.d) term.write(base64ToBytes(result.data.d));
     } catch (error) {
+      this.hooks.log?.('error', 'Failed to restore terminal output', `shell=${shellID}: ${String(error)}`);
       term.write(`\r\n\x1b[31m[${t('Failed to read output')}: ${String(error)}]\x1b[0m\r\n`);
     }
     if (readOnly) term.write(`\r\n\x1b[33m[${t('Read-only history')}]\x1b[0m\r\n`);
@@ -171,6 +219,28 @@ export class TerminalController {
       this.send({ type: 'watch_add', id: shellID });
       this.send({ type: 'resize', id: shellID, rows: term.rows, cols: term.cols });
     }
+  }
+
+  attach(instance, element) {
+    if (instance.element === element) return;
+    instance.resize?.disconnect();
+    if (instance.fragment) {
+      element.appendChild(instance.fragment);
+      instance.fragment = null;
+    } else if (instance.element) {
+      while (instance.element.firstChild) element.appendChild(instance.element.firstChild);
+    }
+    instance.element = element;
+    this.bindActivity(instance, element);
+    instance.resize?.observe(element);
+    try { instance.fit?.fit(); } catch {}
+  }
+
+  bindActivity(instance, element) {
+    const ready = () => { instance.userReady = true; };
+    element.addEventListener('mousedown', ready, { capture: true });
+    element.addEventListener('keydown', ready, { capture: true });
+    element.addEventListener('paste', ready, { capture: true });
   }
 
   dispose() {

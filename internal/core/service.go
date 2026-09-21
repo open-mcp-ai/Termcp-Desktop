@@ -3,12 +3,14 @@ package core
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	appLogging "github.com/open-mcp-ai/termcp/gui/internal/logging"
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/history"
@@ -52,6 +54,16 @@ func (s *Service) Status() Status {
 }
 
 func (s *Service) Start() error {
+	started := time.Now()
+	slog.Debug("Core lifecycle started", "operation", "start", "address", s.BaseURL())
+	var resultErr error
+	defer func() {
+		if resultErr != nil {
+			slog.Error("Core lifecycle failed", "operation", "start", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds(), "error", appLogging.ErrorText(resultErr))
+		} else {
+			slog.Debug("Core lifecycle completed", "operation", "start", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds())
+		}
+	}()
 	s.mu.RLock()
 	running, managed := s.running, s.managed
 	s.mu.RUnlock()
@@ -76,16 +88,19 @@ func (s *Service) Start() error {
 
 	dataDir, err := config.DefaultDataDir()
 	if err != nil {
+		resultErr = err
 		s.setReady(false, err)
 		return err
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		resultErr = err
 		s.setReady(false, err)
 		return err
 	}
 
 	sshSrv := sshserver.New()
 	if err := sshSrv.Start(); err != nil {
+		resultErr = err
 		s.setReady(false, err)
 		return err
 	}
@@ -93,6 +108,7 @@ func (s *Service) Start() error {
 	msgMgr := message.NewManager(store)
 	historyMgr := history.New(store)
 	if err := historyMgr.Load(); err != nil {
+		resultErr = err
 		sshSrv.Stop()
 		s.setReady(false, err)
 		return err
@@ -100,7 +116,7 @@ func (s *Service) Start() error {
 	sessMgr := session.NewManager(msgMgr, store, sshSrv)
 	sessMgr.SetHistory(historyMgr)
 	if err := sessMgr.RestoreDead(); err != nil {
-		fmt.Printf("restore dead sessions: %v\n", err)
+		slog.Warn("restore dead sessions failed", "error", appLogging.ErrorText(err))
 	}
 	sshStore := sshconfig.NewStore(dataDir)
 	forwardMgr := forward.NewForwardManager()
@@ -108,7 +124,7 @@ func (s *Service) Start() error {
 
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	mux := http.NewServeMux()
-	httpServer := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	httpServer := &http.Server{Addr: addr, Handler: appLogging.HTTPMiddleware(mux), ReadHeaderTimeout: 10 * time.Second}
 	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, mcpserver.WithHTTPServer(httpServer))
 	mcpSrv.SetHistory(historyMgr)
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
@@ -132,6 +148,7 @@ func (s *Service) Start() error {
 		select {
 		case startErr := <-errCh:
 			if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
+				resultErr = startErr
 				sshSrv.Stop()
 				s.setReady(false, startErr)
 				return startErr
@@ -141,6 +158,7 @@ func (s *Service) Start() error {
 		time.Sleep(40 * time.Millisecond)
 	}
 	err = errors.New("Core 启动超时")
+	resultErr = err
 	_ = mcpSrv.Stop()
 	sshSrv.Stop()
 	s.setReady(false, err)
@@ -150,6 +168,8 @@ func (s *Service) Start() error {
 // Attach waits for a Core that is owned by the operating system service manager.
 // It never starts an in-process Core when the endpoint is unavailable.
 func (s *Service) Attach(timeout time.Duration) error {
+	started := time.Now()
+	slog.Debug("Core lifecycle started", "operation", "attach", "address", s.BaseURL(), "timeout", timeout)
 	s.mu.Lock()
 	if s.running && !s.managed {
 		s.mu.Unlock()
@@ -162,24 +182,30 @@ func (s *Service) Attach(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		if probe(s.BaseURL() + "/api/sessions") {
 			s.setReady(false, nil)
+			slog.Debug("Core lifecycle completed", "operation", "attach", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds())
 			return nil
 		}
 		time.Sleep(80 * time.Millisecond)
 	}
 	err := errors.New("等待 Core 系统服务启动超时")
 	s.setReady(false, err)
+	slog.Error("Core lifecycle failed", "operation", "attach", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds(), "error", appLogging.ErrorText(err))
 	return err
 }
 
 func (s *Service) Stop() error {
+	started := time.Now()
+	slog.Debug("Core lifecycle started", "operation", "stop", "address", s.BaseURL())
 	s.mu.Lock()
 	if !s.running {
 		s.mu.Unlock()
+		slog.Debug("Core lifecycle completed", "operation", "stop", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds(), "already_stopped", true)
 		return nil
 	}
 	if !s.managed {
 		s.running, s.state = false, "stopped"
 		s.mu.Unlock()
+		slog.Debug("Core lifecycle completed", "operation", "stop", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds(), "detached", true)
 		return nil
 	}
 	s.state = "stopping"
@@ -198,6 +224,11 @@ func (s *Service) Stop() error {
 	s.mu.Lock()
 	s.running, s.managed, s.state, s.mcp, s.sessions, s.ssh = false, false, "stopped", nil, nil, nil
 	s.mu.Unlock()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		slog.Error("Core lifecycle failed", "operation", "stop", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds(), "error", appLogging.ErrorText(err))
+	} else {
+		slog.Debug("Core lifecycle completed", "operation", "stop", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds())
+	}
 	return err
 }
 

@@ -30,7 +30,10 @@ func (m *darwinManager) plistPath() string {
 	return filepath.Join(m.home, "Library", "LaunchAgents", Label+".plist")
 }
 func (m *darwinManager) logPath() string {
-	return filepath.Join(m.home, ".termcp", "logs", "termcp-desktop-core.log")
+	return filepath.Join(m.home, ".termcp", "logs")
+}
+func (m *darwinManager) stdioLogPath() string {
+	return filepath.Join(m.logPath(), "termcp-core-service-stdio.log")
 }
 func (m *darwinManager) domainTarget() string { return fmt.Sprintf("gui/%d/%s", m.uid, Label) }
 func (m *darwinManager) domain() string       { return fmt.Sprintf("gui/%d", m.uid) }
@@ -60,10 +63,10 @@ func (m *darwinManager) Install(autostart bool) error {
 	if err := os.MkdirAll(filepath.Dir(m.plistPath()), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(m.logPath()), 0o700); err != nil {
+	if err := os.MkdirAll(m.logPath(), 0o700); err != nil {
 		return err
 	}
-	data, err := renderPlist(m.executable, m.logPath(), filepath.Join(m.home, ".termcp"), autostart)
+	data, err := renderPlist(m.executable, m.stdioLogPath(), filepath.Join(m.home, ".termcp"), autostart)
 	if err != nil {
 		return err
 	}

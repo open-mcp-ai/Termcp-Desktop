@@ -1,5 +1,27 @@
 # 程序验证记录
 
+## CI/CD（2026-09-21）
+
+| 检查 | 自动化范围 |
+| --- | --- |
+| 三平台单元测试 | Windows amd64、Linux amd64、macOS arm64 分别运行前端测试、Go 测试与覆盖率采集 |
+| 静态与生产检查 | 三个平台分别运行前端语法检查、Vite build、`go vet` 和 Wails production build |
+| Windows 安装器 | CI 与 Release 均通过 Wails/NSIS 构建 `Termcp-<version>-windows-amd64-setup.exe` |
+| 发布产物 | Windows 安装器/便携包、Linux tar.gz、macOS ARM64/Intel zip |
+| 发布入口 | 推送 `vX.Y.Z` 标签或手动运行 Release 工作流；发布前复用完整跨平台 CI |
+| 完整性 | GitHub Release 自动附带全部产物的 `SHA256SUMS` |
+
+## 日志与无缝会话切换（2026-09-21）
+
+| 检查 | 结果 |
+| --- | --- |
+| 日志轮转 | 超过 10 MiB 和跨日均创建新文件；旧文件 14 天后清理；文件权限为 `0600` |
+| 日志脱敏 | HTTP 查询值、密码、令牌和 PEM 私钥不会进入日志；仅保留查询键和请求元数据 |
+| 接口覆盖 | Wails 绑定、Core 出站/入站 HTTP、服务管理、Core 生命周期和前端异常均有结构化记录 |
+| 终端生命周期 | 会话切换后 xterm 对象、滚动输出和 WebSocket watch 保持；output-range 不重复加载 |
+| 快速切换 | 连续切换两个会话后终端、Shell 标签与文件面板保持连续；过期文件面板响应被丢弃 |
+| 平台构建 | macOS Wails 原生包构建通过；Windows/Linux amd64 交叉编译通过 |
+
 ## Go / Wails 实现（2026-09-19）
 
 | 检查 | 结果 |

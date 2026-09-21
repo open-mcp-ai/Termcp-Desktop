@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -27,7 +28,7 @@ func newPlatformManager(executable string) Manager {
 }
 
 func (m *windowsManager) Status() (Status, error) {
-	status := Status{Supported: true, Platform: "windows", Label: WindowsServiceName, Definition: "services.msc · " + WindowsServiceName, LogPath: "Windows Event Viewer", Executable: m.executable, Description: "Windows 系统服务"}
+	status := Status{Supported: true, Platform: "windows", Label: WindowsServiceName, Definition: "services.msc · " + WindowsServiceName, LogPath: filepath.Join(m.dataDir, "logs"), Executable: m.executable, Description: "Windows 系统服务"}
 	managerHandle, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
 		return status, fmt.Errorf("连接 Windows 服务管理器: %w", err)

@@ -7,6 +7,8 @@
     "dev": "npm --prefix frontend run build && node scripts/serve.mjs",
     "dev:wails": "go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 dev",
     "build": "npm --prefix frontend run build && go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build",
-    "check": "npm --prefix frontend run check && npm --prefix frontend run build && go test ./..."
+    "test": "npm --prefix frontend test && npm --prefix frontend run build && go test ./...",
+    "check": "npm --prefix frontend run check && npm test && go vet ./...",
+    "release:version": "node scripts/set-release-version.mjs"
   }
 }

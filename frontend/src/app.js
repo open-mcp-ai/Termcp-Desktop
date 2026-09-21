@@ -24,10 +24,19 @@ import { activePane, activeWorkspace, connectionByName, coreMode, historyByID, r
 
 let refreshTimer;
 let connectionClickTimer;
+let inspectorRequest = 0;
 const terminals = new TerminalController(core, {
   status(status) { state.wsStatus = status; updateConnectionBadge(); },
   sessions() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh({ quiet: true }), 180); },
   notify(message) { toast(message.message || message.text || 'Core notification'); },
+  log(level, message, details) { core.log(level, message, details); },
+});
+
+window.addEventListener('error', event => {
+  core.log('error', 'Unhandled frontend error', `${event.message || 'Unknown error'}${event.filename ? ` · ${event.filename}:${event.lineno || 0}` : ''}`);
+});
+window.addEventListener('unhandledrejection', event => {
+  core.log('error', 'Unhandled frontend promise rejection', String(event.reason || 'Unknown rejection'));
 });
 
 async function refresh({ quiet = false } = {}) {
@@ -81,11 +90,14 @@ function coreIndicator() {
 }
 
 function render() {
-  terminals.clear();
+  terminals.detachAll();
   const fullWidth = state.section === 'settings';
   document.querySelector('#app').innerHTML = `<a class="skip-link" href="#main-content">Skip to main content</a><div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>T_</span><b>Termcp</b></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="Minimise">—</button><button data-window="max" aria-label="Maximise window">□</button><button data-window="close" aria-label="Hide to system tray">×</button></div></header><div class="body ${fullWidth ? 'single-content' : ''}">${rail()}${fullWidth ? '' : explorer()}<main id="main-content" class="content ${state.section === 'workspace' ? 'workspace-content' : ''} ${fullWidth ? 'settings-content' : ''}">${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">Retry</button></div>` : ''}${content()}</main></div></div>${coreIndicator()}${sessionContextMenu()}${terminalContextMenu()}${modal()}`;
   localizeDOM(document.querySelector('#app'));
   if (state.section === 'workspace') mountWorkspace();
+  const liveShells = new Set(state.data.sessions.flatMap(session => (session.shells || []).map(shell => shell.id)));
+  terminals.retain(liveShells);
+  terminals.refreshAppearance();
   if (state.section === 'settings') {
     const preview = document.querySelector('[data-font-preview]');
     if (preview) preview.style.fontFamily = state.appearance.fontFamily === 'system-ui' ? 'system-ui' : `"${state.appearance.fontFamily.replace(/["\\]/g, '')}", sans-serif`;
@@ -105,28 +117,40 @@ async function mountWorkspace() {
     const element = document.querySelector(`[data-terminal-shell="${CSS.escape(pane.shellID)}"]`);
     if (shell && element) terminals.mount(pane.shellID, element, shell.status !== 'running');
   }
-  await loadInspector();
+  await loadInspector({ force: false });
 }
 
-async function loadInspector() {
+async function loadInspector({ force = true } = {}) {
   if (state.section !== 'workspace' || state.inspector.collapsed) return;
   const pane = activePane(); const shell = pane && shellByID(pane.shellID);
   if (!shell) return;
+  const key = `${shell.session.id}|${state.inspector.tab}|${state.inspector.path}`;
+  if (!force && state.inspector.loadedKey === key && (state.inspector.data !== null || state.inspector.error)) return;
+  const request = ++inspectorRequest;
   state.inspector.sessionID = shell.session.id;
   state.inspector.loading = true; state.inspector.error = '';
   const body = document.querySelector('.inspector-body'); if (body) body.innerHTML = '<div class="inspector-empty">Loading…</div>';
+  let inspectorData = null;
+  let inspectorError = '';
   try {
     if (state.inspector.tab === 'files') {
       const result = await core.api('GET', `/api/sessions/${encode(shell.session.id)}/files?path=${encode(state.inspector.path)}`);
-      state.inspector.data = result.data;
+      inspectorData = result.data;
     } else if (state.inspector.tab === 'forwards') {
       const result = await core.api('GET', `/api/sessions/${encode(shell.session.id)}/forwards`);
-      state.inspector.data = result.data;
+      inspectorData = result.data;
     } else {
       const result = await core.api('GET', `/api/notifications?session_id=${encode(shell.session.id)}`);
-      state.inspector.data = result.data;
+      inspectorData = result.data;
     }
-  } catch (error) { state.inspector.error = String(error); state.inspector.data = null; }
+  } catch (error) { inspectorError = String(error); }
+  if (request !== inspectorRequest || state.section !== 'workspace') return;
+  const currentPane = activePane(); const currentShell = currentPane && shellByID(currentPane.shellID);
+  const currentKey = currentShell ? `${currentShell.session.id}|${state.inspector.tab}|${state.inspector.path}` : '';
+  if (currentKey !== key) return;
+  state.inspector.data = inspectorData;
+  state.inspector.error = inspectorError;
+  state.inspector.loadedKey = key;
   state.inspector.loading = false;
   const next = document.querySelector('.inspector-body'); if (next) { next.innerHTML = inspectorBody(shell.session); localizeDOM(next); }
 }
@@ -150,7 +174,7 @@ function openShell(shellID, sessionID) {
   state.activeWorkspace = workspace.id;
   selectShellTab(workspace, shellID, sessionID);
   state.section = 'workspace'; state.selected = { type: 'shell', id: shellID };
-  state.inspector.path = '/'; state.inspector.data = null;
+  state.inspector.path = '/'; state.inspector.data = null; state.inspector.loadedKey = '';
   saveWorkspaces(); render();
 }
 
@@ -251,7 +275,10 @@ async function run(label, operation, options = {}) {
     if (options.refresh !== false) await refresh({ quiet: true });
     else if (options.render) render();
     return result;
-  } catch (error) { toast(String(error), 'error'); return null; }
+  } catch (error) {
+    core.log('error', 'Frontend operation failed', `${label || 'unnamed operation'}: ${String(error)}`);
+    toast(String(error), 'error'); return null;
+  }
 }
 
 async function openConnectionEditor(name = '') {
