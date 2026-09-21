@@ -1,0 +1,85 @@
+.workspace-page {
+  grid-template-rows: 48px minmax(0, 1fr) 42px;
+}
+
+.terminal-workspace,
+.workspace-empty {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.workspace-inspector {
+  grid-column: 2;
+  grid-row: 2 / 4;
+}
+
+.shell-tabbar {
+  grid-column: 1;
+  grid-row: 3;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--terminal-line);
+  background: var(--terminal-bar);
+  color: var(--terminal-muted);
+}
+
+.shell-tab-scroll {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+}
+
+.shell-tab {
+  height: 31px;
+  min-width: 126px;
+  max-width: 210px;
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--terminal-muted);
+  cursor: grab;
+}
+
+.shell-tab.dragging { opacity: .45; }
+.shell-tab:hover { background: var(--terminal-hover); color: var(--terminal-text); }
+.shell-tab.active { border-color: var(--terminal-line); background: var(--terminal); color: var(--terminal-text); }
+.shell-tab > button { height: 100%; border: 0; background: transparent; color: inherit; }
+.shell-tab > button:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; padding: 0 4px 0 9px; text-align: left; }
+.shell-tab > button:first-child span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-small); font-weight: 600; }
+.shell-tab > button:first-child small { max-width: 70px; overflow: hidden; color: var(--terminal-muted); font-size: var(--font-tiny); text-overflow: ellipsis; white-space: nowrap; }
+.shell-tab-close { width: 27px; flex: none; border-radius: 5px; font: 15px/1 ui-monospace, monospace; opacity: 0; }
+.shell-tab:hover .shell-tab-close, .shell-tab.active .shell-tab-close { opacity: 1; }
+.shell-tab-close:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.new-shell-tab { width: 31px; height: 31px; flex: none; display: grid; place-items: center; border: 1px solid var(--terminal-line); border-radius: 6px; background: var(--terminal); color: var(--terminal-muted); }
+.new-shell-tab:hover { background: var(--terminal-hover); color: var(--terminal-accent); }
+.shell-tab-hint, .shell-tabs-empty { color: var(--terminal-muted); font-size: var(--font-tiny); white-space: nowrap; }
+.shell-tab-hint { padding: 0 5px; }
+
+.terminal-context-menu { width: 252px; }
+.context-menu { position: fixed; z-index: 40; padding: 7px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.context-menu header { display: flex; align-items: center; gap: 9px; padding: 8px 9px 11px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.context-menu header span { min-width: 0; }
+.context-menu header b, .context-menu header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-menu header b { font-size: var(--font-small); }
+.context-menu header small { margin-top: 3px; color: var(--muted); font-size: var(--font-tiny); }
+.context-menu > button { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 10px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; font-size: var(--font-small); }
+.context-menu > button span { flex: 1; }
+.context-menu > button:hover { background: var(--surface-3); }
+.context-menu > button.danger { color: var(--danger); }
+.context-menu > button.warning { color: var(--warning); }
+.context-menu > button:disabled { opacity: .38; pointer-events: none; }
+.context-menu hr { height: 1px; margin: 5px 3px; border: 0; background: var(--line); }
+.context-menu kbd { color: var(--subtle); font: var(--font-tiny) ui-monospace, monospace; }
+
+@media (max-width: 980px) {
+  .shell-tab-hint { display: none; }
+  .shell-tab { min-width: 112px; }
+}

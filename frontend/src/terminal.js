@@ -1,4 +1,4 @@
-import { t } from './i18n.js';
+import { t } from './i18n/index.js';
 import { terminalAppearance } from './appearance.js';
 
 const textEncoder = new TextEncoder();
@@ -79,6 +79,44 @@ export class TerminalController {
     }
     this.instances.clear();
     this.wanted.clear();
+  }
+
+  selection(shellID) {
+    return this.instances.get(shellID)?.term.getSelection() || '';
+  }
+
+  async copy(shellID, fallback = '') {
+    const text = this.selection(shellID) || fallback;
+    if (!text) return false;
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  async paste(shellID) {
+    const instance = this.instances.get(shellID);
+    if (!instance) return false;
+    const text = await navigator.clipboard.readText();
+    if (!text) return false;
+    instance.userReady = true;
+    instance.term.focus();
+    instance.term.paste(text);
+    return true;
+  }
+
+  selectAll(shellID) {
+    const term = this.instances.get(shellID)?.term;
+    if (!term) return false;
+    term.selectAll();
+    term.focus();
+    return true;
+  }
+
+  clearShell(shellID) {
+    const term = this.instances.get(shellID)?.term;
+    if (!term) return false;
+    term.clear();
+    term.focus();
+    return true;
   }
 
   async mount(shellID, element, readOnly = false) {

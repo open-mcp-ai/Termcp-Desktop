@@ -1,4 +1,4 @@
-import { t } from './i18n.js';
+import { t } from './i18n/index.js';
 
 const bridge = {
   available: () => Boolean(window.go?.main?.App),
@@ -66,6 +66,14 @@ function response(value, contentType = 'application/json') {
   return { status: 200, content_type: contentType, body: contentType.includes('json') ? JSON.stringify(value) : String(value), headers: {} };
 }
 
+function demoTOMLField(raw, key, fallback = '') {
+  const match = String(raw).match(new RegExp(`^${key}\\s*=\\s*(.+)$`, 'm'));
+  if (!match) return fallback;
+  const value = match[1].trim();
+  if (/^-?\d+$/.test(value)) return Number(value);
+  try { return JSON.parse(value); } catch { return value.replace(/^['"]|['"]$/g, ''); }
+}
+
 function demoAPI(method, rawPath, body) {
   const url = new URL(rawPath, 'http://preview.local');
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
@@ -75,7 +83,15 @@ function demoAPI(method, rawPath, body) {
   if (parts[1] === 'connections' && parts[2]) {
     const name = parts[2];
     if (method === 'GET') return response(demoConnections.get(name) || '', 'text/plain');
-    if (method === 'PUT') { demoConnections.set(name, String(body || '')); return response('', 'text/plain'); }
+    if (method === 'PUT') {
+      const raw = String(body || ''); const from = url.searchParams.get('from');
+      if (from && from !== name) { demoConnections.delete(from); demo.connections = demo.connections.filter(connection => connection.name !== from); }
+      demoConnections.set(name, raw);
+      const summary = { name, kind: 'remote', host: demoTOMLField(raw, 'host'), user: demoTOMLField(raw, 'user'), port: demoTOMLField(raw, 'port', 22), description: demoTOMLField(raw, 'description') };
+      const index = demo.connections.findIndex(connection => connection.name === name);
+      if (index >= 0) demo.connections[index] = summary; else demo.connections.push(summary);
+      return response('', 'text/plain');
+    }
     if (method === 'DELETE') { demoConnections.delete(name); demo.connections = demo.connections.filter(c => c.name !== name); return response(''); }
   }
   if (method === 'POST' && url.pathname === '/api/connections/test') return response({ ok: true, latency_ms: 42 });

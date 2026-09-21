@@ -5,6 +5,7 @@ frontend/package.json.md5
 build/bin/
 frontend/wailsjs/
 .DS_Store
+.idea/
 artifacts/
 .termcp/
 .env
