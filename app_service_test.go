@@ -3,11 +3,11 @@ package main
 import (
 	"testing"
 
-	"github.com/open-mcp-ai/termcp/gui/internal/systemservice"
+	"github.com/open-mcp-ai/termcp/gui/internal/config"
 )
 
 type fakeSystemService struct {
-	status         systemservice.Status
+	status         config.Status
 	installCalls   int
 	startCalls     int
 	stopCalls      int
@@ -16,7 +16,7 @@ type fakeSystemService struct {
 	autostartCalls int
 }
 
-func (f *fakeSystemService) Status() (systemservice.Status, error) { return f.status, nil }
+func (f *fakeSystemService) Status() (config.Status, error) { return f.status, nil }
 func (f *fakeSystemService) Install(autostart bool) error {
 	f.installCalls++
 	f.status.Installed, f.status.Autostart = true, autostart
@@ -49,9 +49,9 @@ func (f *fakeSystemService) SetAutostart(enabled bool) error {
 }
 
 func TestServiceStatusAndAutostartBinding(t *testing.T) {
-	fake := &fakeSystemService{status: systemservice.Status{
+	fake := &fakeSystemService{status: config.Status{
 		Supported: true, Platform: "linux", Installed: true, Running: true,
-		Autostart: true, PID: 42, Label: systemservice.Label, Description: "systemd 用户服务",
+		Autostart: true, PID: 42, Label: config.Label, Description: "systemd 用户服务",
 	}}
 	app := newAppWithService(serviceForURL(t, "http://127.0.0.1:18765"), fake)
 	status, err := app.GetServiceStatus()

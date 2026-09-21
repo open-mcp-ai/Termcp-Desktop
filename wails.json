@@ -1,16 +1,19 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "Termcp-Desktop",
+  "name": "Termcp",
   "outputfilename": "Termcp",
-  "frontend:install": "npm install",
+  "frontend:install": "npm ci",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
-  "author": {"name": "termcp contributors"},
+  "author": {
+    "name": "termcp contributors"
+  },
   "info": {
+    "companyName": "open-mcp-ai",
     "productName": "Termcp",
     "productVersion": "0.1.0",
     "copyright": "Copyright © 2026 open-mcp-ai contributors",
-    "comments": "termcp Core desktop manager and SSH workspace"
+    "comments": "termcp desktop manager and SSH workspace"
   }
 }

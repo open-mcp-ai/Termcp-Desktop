@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
+	"github.com/open-mcp-ai/termcp/gui/internal/model"
 )
 
 func TestArgumentValue(t *testing.T) {
@@ -72,14 +73,14 @@ func TestAPIProxiesTextJSONAndBinary(t *testing.T) {
 	t.Cleanup(func() { _ = service.Stop() })
 	app := newApp(service)
 
-	jsonResponse, err := app.API(APIRequest{Method: "PATCH", Path: "/api/example", Body: `{"name":"updated"}`, ContentType: "application/json"})
+	jsonResponse, err := app.API(model.APIRequest{Method: "PATCH", Path: "/api/example", Body: `{"name":"updated"}`, ContentType: "application/json"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if jsonResponse.Body != `{"ok":true}` || jsonResponse.Status != http.StatusOK {
 		t.Fatalf("unexpected JSON response: %+v", jsonResponse)
 	}
-	binaryResponse, err := app.API(APIRequest{Method: "GET", Path: "/api/image"})
+	binaryResponse, err := app.API(model.APIRequest{Method: "GET", Path: "/api/image"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,11 +92,11 @@ func TestAPIProxiesTextJSONAndBinary(t *testing.T) {
 func TestAPIRejectsRequestsOutsideCoreAPI(t *testing.T) {
 	app := NewApp()
 	for _, candidate := range []string{"https://example.test/api/sessions", "/stream", "api/sessions"} {
-		if _, err := app.API(APIRequest{Method: "GET", Path: candidate}); err == nil {
+		if _, err := app.API(model.APIRequest{Method: "GET", Path: candidate}); err == nil {
 			t.Fatalf("API accepted %q", candidate)
 		}
 	}
-	if _, err := app.API(APIRequest{Method: "TRACE", Path: "/api/sessions"}); err == nil {
+	if _, err := app.API(model.APIRequest{Method: "TRACE", Path: "/api/sessions"}); err == nil {
 		t.Fatal("API accepted TRACE")
 	}
 }

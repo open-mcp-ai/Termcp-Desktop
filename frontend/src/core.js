@@ -4,29 +4,44 @@ const bridge = {
   available: () => Boolean(window.go?.main?.App),
   call(name, ...args) {
     const fn = window.go?.main?.App?.[name];
-    return fn ? fn(...args) : Promise.reject(new Error('Wails bridge unavailable'));
+    if (!fn) return Promise.reject(new Error('Wails bridge unavailable'));
+    let result;
+    try { result = fn(...args); } catch (error) {
+      if (name !== 'LogFrontend') reportFrontend('error', 'Wails binding threw', `${name}: ${String(error)}`);
+      return Promise.reject(error);
+    }
+    return Promise.resolve(result).catch(error => {
+      if (name !== 'LogFrontend') reportFrontend('error', 'Wails binding rejected', `${name}: ${String(error)}`);
+      throw error;
+    });
   },
 };
+
+function reportFrontend(level, message, details = '') {
+  const logger = window.go?.main?.App?.LogFrontend;
+  if (logger) Promise.resolve(logger(level, String(message), String(details))).catch(() => {});
+  else if (level === 'error') console.error(message, details);
+}
 
 const now = new Date().toISOString();
 const demo = {
   core: { running: true, managed: true, address: 'http://127.0.0.1:18765', state: 'running' },
   connections: [
-    { name: 'internal', kind: 'internal', description: 'Core 所在本机' },
-    { name: 'dev-server', kind: 'remote', host: 'dev.example.test', user: 'developer', port: 22, description: '开发环境' },
-    { name: 'staging', kind: 'remote', host: 'staging.example.test', user: 'operator', port: 22, description: '预发布环境' },
+    { name: 'internal', kind: 'internal', description: 'This computer' },
+    { name: 'dev-server', kind: 'remote', host: 'dev.example.test', user: 'developer', port: 22, description: 'Development' },
+    { name: 'staging', kind: 'remote', host: 'staging.example.test', user: 'operator', port: 22, description: 'Staging' },
   ],
   sessions: [
-    { id: 'session-demo-01', name: 'API 开发', status: 'running', mode: 'pty', ssh_endpoint: 'remote', created_at: now, updated_at: now, shells: [
+    { id: 'session-demo-01', name: 'API development', status: 'running', mode: 'pty', ssh_endpoint: 'remote', created_at: now, updated_at: now, shells: [
       { id: 'shell-demo-01', name: 'build', status: 'running', mode: 'pty' },
       { id: 'shell-demo-02', name: 'logs', status: 'running', mode: 'pty' },
     ] },
-    { id: 'session-demo-02', name: '本地工作区', status: 'running', mode: 'pty', ssh_endpoint: 'internal', created_at: now, updated_at: now, shells: [
+    { id: 'session-demo-02', name: 'Local workspace', status: 'running', mode: 'pty', ssh_endpoint: 'internal', created_at: now, updated_at: now, shells: [
       { id: 'shell-demo-03', name: 'zsh', status: 'running', mode: 'pty' },
     ] },
   ],
   history: [
-    { id: 'history-demo-01', name: '发布检查', status: 'archived', reason: 'explicit', ssh_endpoint: 'remote', updated_at: now, tags: ['release'], notes: '演示历史记录' },
+    { id: 'history-demo-01', name: 'Release check', status: 'archived', reason: 'explicit', ssh_endpoint: 'remote', updated_at: now, tags: ['release'], notes: 'Demo history entry' },
   ],
   forwards: [],
   fetched_at: now,
@@ -42,7 +57,7 @@ const demoService = {
   pid: 2841,
   label: 'ai.openmcp.termcp.desktop.core',
   definition: '~/Library/LaunchAgents/ai.openmcp.termcp.desktop.core.plist',
-  log_path: '~/.termcp/logs/termcp-desktop-core.log',
+  log_path: '~/.termcp/logs',
   data_dir: '~/.termcp',
   executable: '/Applications/Termcp-Desktop.app/Contents/MacOS/Termcp',
   description: 'macOS LaunchAgent',
@@ -154,6 +169,7 @@ function demoAPI(method, rawPath, body) {
 export const core = {
   bridge,
   preview: !bridge.available(),
+  log(level, message, details = '') { reportFrontend(level, message, details); },
   async snapshot() {
     return bridge.available() ? bridge.call('GetSnapshot') : clone(demo);
   },
@@ -181,7 +197,7 @@ export const core = {
     return bridge.call('ChooseAndUploadFile', sessionID, directory);
   },
   async save(path, filename) {
-    if (!bridge.available()) throw new Error(t('浏览器预览不执行本机下载'));
+    if (!bridge.available()) throw new Error(t('Local downloads are disabled in browser preview'));
     return bridge.call('SaveAPIResource', path, filename);
   },
   async installService(autostart = true) {

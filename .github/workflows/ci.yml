@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test and build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux amd64
+            os: ubuntu-24.04
+            slug: linux-amd64
+            go-flags: -tags=webkit2_41
+          - name: Windows amd64
+            os: windows-latest
+            slug: windows-amd64
+            go-flags: ''
+          - name: macOS arm64
+            os: macos-15
+            slug: macos-arm64
+            go-flags: ''
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install nsis --yes --no-progress
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Run frontend unit tests
+        run: npm --prefix frontend test
+
+      - name: Check and build frontend
+        run: |
+          npm --prefix frontend run check
+          npm --prefix frontend run build
+
+      - name: Run Go unit tests with coverage
+        shell: bash
+        run: go test ${{ matrix.go-flags }} -covermode=atomic -coverprofile=coverage-${{ matrix.slug }}.out ./...
+
+      - name: Run Go vet
+        shell: bash
+        run: go vet ${{ matrix.go-flags }} ./...
+
+      - name: Build Linux application
+        if: runner.os == 'Linux'
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform linux/amd64 -tags webkit2_41
+
+      - name: Build Windows application and installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform windows/amd64 -nsis
+
+      - name: Build macOS application
+        if: runner.os == 'macOS'
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform darwin/arm64
+
+      - name: Verify Windows installer exists
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-ChildItem build/bin -Filter '*-amd64-installer.exe')) {
+            throw 'Wails did not produce an NSIS installer.'
+          }
+
+      - name: Upload Go coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.slug }}
+          path: coverage-${{ matrix.slug }}.out
+          if-no-files-found: error
+          retention-days: 14
