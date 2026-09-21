@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,8 @@ func TestRotatesBySizeAndRemovesExpiredLogs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o600 {
+		// Windows does not model Unix permission bits, so only assert them elsewhere.
+		if goruntime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 			t.Fatalf("log permissions = %o", info.Mode().Perm())
 		}
 	}
