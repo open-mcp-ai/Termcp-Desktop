@@ -146,6 +146,11 @@ jobs:
           go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform "$PLATFORM" -ldflags "$ldflags"
           mkdir -p artifacts
           ditto -c -k --sequesterRsrc --keepParent build/bin/Termcp.app "artifacts/Termcp-$VERSION-$SLUG.zip"
+          staging="$(mktemp -d)"
+          cp -R build/bin/Termcp.app "$staging/Termcp.app"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname "Termcp $VERSION" -srcfolder "$staging" -ov -format UDZO "artifacts/Termcp-$VERSION-$SLUG.dmg"
+          rm -rf "$staging"
 
       - name: Upload release package
         uses: actions/upload-artifact@v7
