@@ -12,7 +12,7 @@
   "info": {
     "companyName": "open-mcp-ai",
     "productName": "Termcp",
-    "productVersion": "0.1.1",
+    "productVersion": "0.1.0",
     "copyright": "Copyright © 2026 open-mcp-ai contributors",
     "comments": "termcp desktop manager and SSH workspace"
   }

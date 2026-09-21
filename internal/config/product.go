@@ -13,7 +13,7 @@ const (
 )
 
 // ProductVersion may be replaced at release build time with Go's -X linker flag.
-var ProductVersion = "0.1.1"
+var ProductVersion = "0.1.0"
 
 // DataDir returns the resolved termcp data directory for this process.
 func DataDir() string {
