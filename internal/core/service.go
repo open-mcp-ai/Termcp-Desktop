@@ -52,11 +52,20 @@ func (s *Service) Status() Status {
 }
 
 func (s *Service) Start() error {
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
+	s.mu.RLock()
+	running, managed := s.running, s.managed
+	s.mu.RUnlock()
+	if running && managed {
 		return nil
 	}
+	if running && probe(s.BaseURL()+"/api/sessions") {
+		return nil
+	}
+
+	// Either nothing is running, or we are attached to a service process that has
+	// already gone away. Clear that stale attachment before deciding how to start.
+	s.mu.Lock()
+	s.running, s.managed = false, false
 	s.state, s.lastErr = "starting", ""
 	s.mu.Unlock()
 
@@ -190,6 +199,27 @@ func (s *Service) Stop() error {
 	s.running, s.managed, s.state, s.mcp, s.sessions, s.ssh = false, false, "stopped", nil, nil, nil
 	s.mu.Unlock()
 	return err
+}
+
+// WaitDetached drops a stale attachment and waits until no Core answers on the
+// endpoint. It is used after removing the system service so that a freshly
+// started Core does not race with the service process that is still shutting down.
+func (s *Service) WaitDetached(timeout time.Duration) {
+	s.mu.Lock()
+	if s.managed {
+		s.mu.Unlock()
+		return
+	}
+	s.running, s.state = false, "stopped"
+	s.mu.Unlock()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !probe(s.BaseURL() + "/api/sessions") {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
 }
 
 func (s *Service) setReady(managed bool, err error) {

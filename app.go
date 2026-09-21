@@ -308,11 +308,13 @@ func (a *App) InstallCoreService(autostart bool) error {
 	if err := a.core.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	a.core.WaitDetached(5 * time.Second)
 	if err := a.service.Install(autostart); err != nil {
 		_ = a.core.Start()
 		return err
 	}
 	if err := a.service.Start(); err != nil {
+		_ = a.core.Start()
 		return err
 	}
 	return a.core.Attach(15 * time.Second)
@@ -326,6 +328,7 @@ func (a *App) UninstallCoreService() error {
 	if err := a.service.Uninstall(); err != nil {
 		return err
 	}
+	a.core.WaitDetached(8 * time.Second)
 	return a.core.Start()
 }
 

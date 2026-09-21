@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type darwinManager struct {
@@ -73,19 +74,39 @@ func (m *darwinManager) Install(autostart bool) error {
 	if err := os.Rename(temp, m.plistPath()); err != nil {
 		return err
 	}
-	_ = exec.Command("launchctl", "bootout", m.domainTarget()).Run()
-	if output, err := exec.Command("launchctl", "bootstrap", m.domain(), m.plistPath()).CombinedOutput(); err != nil {
-		return fmt.Errorf("注册 LaunchAgent: %w: %s", err, strings.TrimSpace(string(output)))
+	m.unload()
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		output, err := exec.Command("launchctl", "bootstrap", m.domain(), m.plistPath()).CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		lastErr = fmt.Errorf("注册 LaunchAgent: %w: %s", err, strings.TrimSpace(string(output)))
+		// launchd can still be tearing down the previous instance; boot it out and retry.
+		m.unload()
 	}
-	return nil
+	return lastErr
 }
 
 func (m *darwinManager) Uninstall() error {
-	_ = exec.Command("launchctl", "bootout", m.domainTarget()).Run()
+	m.unload()
 	if err := os.Remove(m.plistPath()); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
+}
+
+// unload boots the service out of the user domain and waits until launchd has
+// actually released the job, so an immediate bootstrap cannot fail with EIO.
+func (m *darwinManager) unload() {
+	_ = exec.Command("launchctl", "bootout", m.domainTarget()).Run()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if exec.Command("launchctl", "print", m.domainTarget()).Run() != nil {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
 }
 
 func (m *darwinManager) Start() error {
