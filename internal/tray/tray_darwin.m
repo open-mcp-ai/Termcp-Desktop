@@ -61,7 +61,7 @@ void termcp_tray_start(const void *icon, int icon_length) {
         termcpStatusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
         termcpStatusItem.button.toolTip = @"Termcp";
         termcpStatusItem.button.image = nil;
-        termcpStatusItem.button.title = @"t_";
+        termcpStatusItem.button.title = @"T_";
         if (@available(macOS 10.15, *)) {
             termcpStatusItem.button.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightSemibold];
         } else {

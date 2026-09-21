@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package fonts
 
 import (
 	"os/exec"
@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func systemFontFamilies() []string {
+func families() []string {
 	output, err := exec.Command("fc-list", "--format", "%{family}\n").Output()
 	if err != nil {
 		return nil

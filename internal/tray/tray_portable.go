@@ -1,16 +1,18 @@
 //go:build windows || linux
 
-package main
+package tray
 
 import (
 	"runtime"
 	"sync"
 
 	"github.com/gogpu/systray"
+	"github.com/open-mcp-ai/termcp/gui/internal/config"
 )
 
 type portableTray struct {
-	dispatch  func(trayAction)
+	dispatch  func(action)
+	icon      []byte
 	tray      *systray.SystemTray
 	product   *systray.MenuItem
 	core      *systray.MenuItem
@@ -29,8 +31,8 @@ type portableTray struct {
 	mu        sync.RWMutex
 }
 
-func newNativeTray(dispatch func(trayAction)) nativeTray {
-	return &portableTray{dispatch: dispatch, ready: make(chan struct{})}
+func newNativeTray(icon []byte, dispatch func(action)) nativeTray {
+	return &portableTray{dispatch: dispatch, icon: icon, ready: make(chan struct{})}
 }
 
 func (t *portableTray) Start() error {
@@ -40,24 +42,24 @@ func (t *portableTray) Start() error {
 
 		tray := systray.New()
 		menu := systray.NewMenu()
-		product := menu.Add(productName+" "+productVersion+" · "+projectName, nil)
+		product := menu.Add(config.ProductName+" "+config.ProductVersion+" · "+config.ProjectName, nil)
 		product.SetDisabled(true)
 		core := menu.Add("Core：正在读取状态", nil)
 		core.SetDisabled(true)
 		service := menu.Add("系统服务：正在读取状态", nil)
 		service.SetDisabled(true)
 		menu.AddSeparator()
-		show := menu.Add("Termcp", func() { t.dispatch(trayShowWindow) })
-		workspace := menu.Add("SSH", func() { t.dispatch(trayOpenWorkspace) })
-		manage := menu.Add("Service", func() { t.dispatch(trayOpenService) })
+		show := menu.Add("Termcp", func() { t.dispatch(actionShowWindow) })
+		workspace := menu.Add("SSH", func() { t.dispatch(actionOpenWorkspace) })
+		manage := menu.Add("Service", func() { t.dispatch(actionOpenService) })
 		menu.AddSeparator()
-		start := menu.Add("启动 Core", func() { t.dispatch(trayStartCore) })
-		stop := menu.Add("停止 Core", func() { t.dispatch(trayStopCore) })
-		restart := menu.Add("重启 Core", func() { t.dispatch(trayRestartCore) })
-		autostart := menu.AddCheckbox("开机自启", false, func() { t.dispatch(trayToggleAutostart) })
+		start := menu.Add("启动 Core", func() { t.dispatch(actionStartCore) })
+		stop := menu.Add("停止 Core", func() { t.dispatch(actionStopCore) })
+		restart := menu.Add("重启 Core", func() { t.dispatch(actionRestartCore) })
+		autostart := menu.AddCheckbox("开机自启", false, func() { t.dispatch(actionToggleAutostart) })
 		menu.AddSeparator()
-		about := menu.Add("About", func() { t.dispatch(trayShowAbout) })
-		quit := menu.Add("Quit", func() { t.dispatch(trayQuit) })
+		about := menu.Add("About", func() { t.dispatch(actionShowAbout) })
+		quit := menu.Add("Quit", func() { t.dispatch(actionQuit) })
 
 		t.mu.Lock()
 		t.tray, t.product, t.core, t.service = tray, product, core, service
@@ -66,12 +68,15 @@ func (t *portableTray) Start() error {
 		t.about, t.quit = about, quit
 		t.mu.Unlock()
 
-		tray.SetIcon(trayIconPNG).
-			SetAppName(productName).
-			SetTooltip(productName).
+		configured := tray.
+			SetAppName(config.ProductName).
+			SetTooltip(config.ProductName).
 			SetMenu(menu).
-			OnClick(func() { t.dispatch(trayShowWindow) }).
-			Show()
+			OnClick(func() { t.dispatch(actionShowWindow) })
+		if len(t.icon) > 0 {
+			configured = configured.SetIcon(t.icon)
+		}
+		configured.Show()
 		close(t.ready)
 		_ = tray.Run()
 	}()
@@ -79,7 +84,7 @@ func (t *portableTray) Start() error {
 	return nil
 }
 
-func (t *portableTray) Update(state trayState) {
+func (t *portableTray) Update(state State) {
 	<-t.ready
 	t.mu.RLock()
 	defer t.mu.RUnlock()

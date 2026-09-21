@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package fonts
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-func systemFontFamilies() []string {
+func families() []string {
 	command := `[System.Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null; $f = New-Object System.Drawing.Text.InstalledFontCollection; @($f.Families | ForEach-Object { $_.Name } | Sort-Object -Unique) | ConvertTo-Json -Compress`
 	output, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command).Output()
 	if err != nil {

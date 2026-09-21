@@ -60,12 +60,14 @@ macOS 构建结果位于 `build/bin/Termcp-Desktop.app`，应用显示名和主�
 
 ```text
 frontend/          资源管理器界面与浏览器预览
-internal/core/     termcp Core 的进程内生命周期封装
-internal/systemservice/ macOS / Linux / Windows 系统服务管理
-app.go             Wails 绑定与 Core REST 客户端
-api.go             受限 API 桥与原生上传/下载
+internal/config/   产品信息、数据目录与系统服务注册（macOS / Linux / Windows）
+internal/core/     进程内 Core 生命周期与服务运行入口
+internal/bridge/   受限 API 桥与原生上传/下载
+internal/fonts/    系统字体发现
+internal/tray/     系统托盘与状态菜单（macOS / Windows / Linux）
+internal/model/    前后端共享的数据结构
+app.go             Wails 绑定与 Core 生命周期编排
 main.go            原生窗口、单实例、服务模式和资源打包入口
-tray*.go/.m        macOS、Windows、Linux 系统托盘与状态菜单
 prototype/         前期多方案交互原型归档
 docs/              产品、SSH 工作区与架构说明
 ```

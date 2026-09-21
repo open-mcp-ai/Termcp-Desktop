@@ -1,17 +1,18 @@
-package main
+package tray
 
 import (
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/open-mcp-ai/termcp/gui/internal/systemservice"
+	"github.com/open-mcp-ai/termcp/gui/internal/config"
+	"github.com/open-mcp-ai/termcp/gui/internal/model"
 )
 
-func TestFormatTrayStateRunningService(t *testing.T) {
-	state := formatTrayState(
-		CoreStatus{Running: true, Address: "http://127.0.0.1:18765"},
-		systemservice.Status{Supported: true, Installed: true, Running: true, Autostart: true},
+func TestFormatStateRunningService(t *testing.T) {
+	state := formatState(
+		model.CoreStatus{Running: true, Address: "http://127.0.0.1:18765"},
+		config.Status{Supported: true, Installed: true, Running: true, Autostart: true},
 		nil,
 		"zh-CN",
 	)
@@ -30,10 +31,10 @@ func TestFormatTrayStateRunningService(t *testing.T) {
 	}
 }
 
-func TestFormatTrayStateErrorsAreSafeLabels(t *testing.T) {
-	state := formatTrayState(
-		CoreStatus{State: "error", Error: "端口被占用"},
-		systemservice.Status{},
+func TestFormatStateErrorsAreSafeLabels(t *testing.T) {
+	state := formatState(
+		model.CoreStatus{State: "error", Error: "端口被占用"},
+		config.Status{},
 		errors.New("status unavailable"),
 		"zh-CN",
 	)
@@ -45,10 +46,10 @@ func TestFormatTrayStateErrorsAreSafeLabels(t *testing.T) {
 	}
 }
 
-func TestFormatTrayStateEnglish(t *testing.T) {
-	state := formatTrayState(
-		CoreStatus{Running: true, Address: "http://127.0.0.1:18765"},
-		systemservice.Status{Supported: true, Installed: true, Running: false, Autostart: false},
+func TestFormatStateEnglish(t *testing.T) {
+	state := formatState(
+		model.CoreStatus{Running: true, Address: "http://127.0.0.1:18765"},
+		config.Status{Supported: true, Installed: true, Running: false, Autostart: false},
 		nil,
 		"en",
 	)

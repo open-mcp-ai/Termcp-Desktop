@@ -1,4 +1,4 @@
-package systemservice
+package config
 
 const (
 	Label              = "ai.openmcp.termcp.desktop.core"
@@ -29,6 +29,6 @@ type Manager interface {
 	SetAutostart(enabled bool) error
 }
 
-func New(executable string) Manager {
+func NewManager(executable string) Manager {
 	return newPlatformManager(executable)
 }

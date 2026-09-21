@@ -1,21 +1,21 @@
-package main
+package config
 
 import (
 	"fmt"
 	"os"
-
-	"github.com/open-mcp-ai/termcp/gui/internal/systemservice"
 )
 
-func runSystemServiceAction(action string) error {
+// RunAction executes a system service action requested from the command line
+// (for example `Termcp --system-service-action uninstall`).
+func RunAction(action string, autostart bool) error {
 	executable, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	manager := systemservice.New(executable)
+	manager := NewManager(executable)
 	switch action {
 	case "install":
-		return manager.Install(hasArgument("--autostart"))
+		return manager.Install(autostart)
 	case "uninstall":
 		return manager.Uninstall()
 	case "start":

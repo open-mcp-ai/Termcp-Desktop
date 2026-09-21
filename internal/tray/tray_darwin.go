@@ -1,6 +1,6 @@
 //go:build darwin
 
-package main
+package tray
 
 /*
 #cgo CFLAGS: -fobjc-arc
@@ -26,26 +26,24 @@ import (
 )
 
 type darwinTray struct {
-	dispatch func(trayAction)
+	dispatch func(action)
 }
 
 var activeDarwinTray atomic.Pointer[darwinTray]
 
-func newNativeTray(dispatch func(trayAction)) nativeTray {
+func newNativeTray(icon []byte, dispatch func(action)) nativeTray {
 	return &darwinTray{dispatch: dispatch}
 }
 
 func (t *darwinTray) Start() error {
 	activeDarwinTray.Store(t)
-	if len(trayIconPNG) == 0 {
-		C.termcp_tray_start(nil, 0)
-		return nil
-	}
-	C.termcp_tray_start(unsafe.Pointer(&trayIconPNG[0]), C.int(len(trayIconPNG)))
+	// The macOS status item uses a text title; the icon is only relevant to the
+	// portable tray implementations.
+	C.termcp_tray_start(nil, 0)
 	return nil
 }
 
-func (t *darwinTray) Update(state trayState) {
+func (t *darwinTray) Update(state State) {
 	product := C.CString(state.ProductLine)
 	core := C.CString(state.CoreLine)
 	service := C.CString(state.ServiceLine)
@@ -91,9 +89,9 @@ func boolInt(value bool) C.int {
 }
 
 //export termcp_tray_action
-func termcp_tray_action(action C.int) {
-	tray := activeDarwinTray.Load()
-	if tray != nil {
-		tray.dispatch(trayAction(action))
+func termcp_tray_action(value C.int) {
+	current := activeDarwinTray.Load()
+	if current != nil {
+		current.dispatch(action(value))
 	}
 }

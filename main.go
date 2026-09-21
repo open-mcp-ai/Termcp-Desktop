@@ -2,12 +2,11 @@ package main
 
 import (
 	"embed"
-	"fmt"
 	"log"
 	"os"
-	"path/filepath"
-	"strings"
 
+	"github.com/open-mcp-ai/termcp/gui/internal/config"
+	"github.com/open-mcp-ai/termcp/gui/internal/core"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -17,12 +16,15 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed build/trayicon.png
+var trayIconPNG []byte
+
 func main() {
 	if err := configureTermcpDataDir(""); err != nil {
 		log.Fatal(err)
 	}
 	if action, ok := argumentValue("--system-service-action"); ok {
-		if err := runSystemServiceAction(action); err != nil {
+		if err := config.RunAction(action, hasArgument("--autostart")); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -33,14 +35,14 @@ func main() {
 				log.Fatal(err)
 			}
 		}
-		if err := runCoreService(); err != nil {
+		if err := core.Run(); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 	app := NewApp()
 	err := wails.Run(&options.App{
-		Title:             productName,
+		Title:             config.ProductName,
 		Width:             1360,
 		Height:            860,
 		MinWidth:          980,
@@ -62,7 +64,7 @@ func main() {
 		},
 		Mac: &mac.Options{
 			TitleBar: mac.TitleBarHiddenInset(),
-			About:    &mac.AboutInfo{Title: productName, Message: "本机 termcp Core 管理端与 SSH 工作台"},
+			About:    &mac.AboutInfo{Title: config.ProductName, Message: "本机 termcp Core 管理端与 SSH 工作台"},
 		},
 	})
 	if err != nil {
@@ -71,15 +73,8 @@ func main() {
 }
 
 func configureTermcpDataDir(explicit string) error {
-	dataDir := strings.TrimSpace(explicit)
-	if dataDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("resolve user home for termcp data: %w", err)
-		}
-		dataDir = filepath.Join(home, ".termcp")
-	}
-	return os.Setenv("TERMCP_DATA_DIR", filepath.Clean(dataDir))
+	_, err := config.ResolveDataDir(explicit)
+	return err
 }
 
 func argumentValue(name string) (string, bool) {

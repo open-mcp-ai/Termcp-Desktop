@@ -1,6 +1,6 @@
 //go:build !darwin && !linux && !windows
 
-package systemservice
+package config
 
 import "runtime"
 

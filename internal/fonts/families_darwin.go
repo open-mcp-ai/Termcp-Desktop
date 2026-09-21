@@ -1,6 +1,6 @@
 //go:build darwin
 
-package main
+package fonts
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func systemFontFamilies() []string {
+func families() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, "system_profiler", "SPFontsDataType", "-json", "-detailLevel", "mini").Output()
@@ -42,10 +42,10 @@ func systemFontFamilies() []string {
 			}
 		}
 	}
-	return sortedFontNames(set)
+	return sortedNames(set)
 }
 
-func sortedFontNames(set map[string]struct{}) []string {
+func sortedNames(set map[string]struct{}) []string {
 	fonts := make([]string, 0, len(set))
 	for font := range set {
 		fonts = append(fonts, font)

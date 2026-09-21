@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
+	"github.com/open-mcp-ai/termcp/gui/internal/model"
 )
 
 func TestIntegratedCoreResourceLifecycle(t *testing.T) {
@@ -104,7 +105,7 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	assertAPIStatus(t, app, "DELETE", "/api/connections/integration", nil, http.StatusNoContent)
 }
 
-func assertAPIStatus(t *testing.T, app *App, method, path string, body any, want int, contentTypes ...string) APIResponse {
+func assertAPIStatus(t *testing.T, app *App, method, path string, body any, want int, contentTypes ...string) model.APIResponse {
 	t.Helper()
 	var raw string
 	contentType := ""
@@ -123,7 +124,7 @@ func assertAPIStatus(t *testing.T, app *App, method, path string, body any, want
 	if len(contentTypes) > 0 {
 		contentType = contentTypes[0]
 	}
-	response, err := app.API(APIRequest{Method: method, Path: path, Body: raw, ContentType: contentType})
+	response, err := app.API(model.APIRequest{Method: method, Path: path, Body: raw, ContentType: contentType})
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}
@@ -133,7 +134,7 @@ func assertAPIStatus(t *testing.T, app *App, method, path string, body any, want
 	return response
 }
 
-func decodeResponse(t *testing.T, response APIResponse, target any) {
+func decodeResponse(t *testing.T, response model.APIResponse, target any) {
 	t.Helper()
 	if err := json.Unmarshal([]byte(response.Body), target); err != nil {
 		t.Fatalf("decode %q: %v", response.Body, err)

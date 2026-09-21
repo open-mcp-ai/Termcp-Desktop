@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,124 +12,39 @@ import (
 	"sync"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/gui/internal/bridge"
+	"github.com/open-mcp-ai/termcp/gui/internal/config"
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
-	"github.com/open-mcp-ai/termcp/gui/internal/systemservice"
+	"github.com/open-mcp-ai/termcp/gui/internal/fonts"
+	"github.com/open-mcp-ai/termcp/gui/internal/model"
+	"github.com/open-mcp-ai/termcp/gui/internal/tray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
 	ctx        context.Context
 	core       *corepkg.Service
-	client     *http.Client
-	transfer   *http.Client
-	service    systemservice.Manager
-	tray       *trayController
+	bridge     *bridge.Client
+	service    config.Manager
+	tray       *tray.Controller
 	dataDir    string
 	lifecycle  sync.Mutex
 	language   sync.RWMutex
 	uiLanguage string
 }
 
-type CoreStatus struct {
-	Running bool   `json:"running"`
-	Managed bool   `json:"managed"`
-	Address string `json:"address"`
-	State   string `json:"state"`
-	Error   string `json:"error,omitempty"`
-}
-
-type ServiceStatus struct {
-	Supported   bool       `json:"supported"`
-	Platform    string     `json:"platform"`
-	Installed   bool       `json:"installed"`
-	Running     bool       `json:"running"`
-	Autostart   bool       `json:"autostart"`
-	PID         int        `json:"pid,omitempty"`
-	Label       string     `json:"label"`
-	Definition  string     `json:"definition,omitempty"`
-	LogPath     string     `json:"log_path,omitempty"`
-	Executable  string     `json:"executable,omitempty"`
-	Description string     `json:"description,omitempty"`
-	DataDir     string     `json:"data_dir"`
-	Core        CoreStatus `json:"core"`
-}
-
-type Connection struct {
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Description string `json:"description,omitempty"`
-	Host        string `json:"host,omitempty"`
-	User        string `json:"user,omitempty"`
-	Port        int    `json:"port,omitempty"`
-}
-
-type Shell struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Status   string `json:"status"`
-	Mode     string `json:"mode"`
-	ExitCode *int   `json:"exit_code,omitempty"`
-}
-
-type Session struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Status      string  `json:"status"`
-	Mode        string  `json:"mode"`
-	SSHEndpoint string  `json:"ssh_endpoint,omitempty"`
-	CreatedAt   string  `json:"created_at,omitempty"`
-	UpdatedAt   string  `json:"updated_at,omitempty"`
-	Shells      []Shell `json:"shells"`
-}
-
-type HistoryEntry struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Status      string   `json:"status"`
-	SSHEndpoint string   `json:"ssh_endpoint,omitempty"`
-	Reason      string   `json:"reason,omitempty"`
-	UpdatedAt   string   `json:"updated_at,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-}
-
-type Forward struct {
-	ForwardID string `json:"forward_id"`
-	SessionID string `json:"session_id"`
-	Direction string `json:"direction"`
-	SSHConfig string `json:"ssh_config"`
-	Listen    string `json:"listen_addr"`
-	Target    string `json:"target_addr"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
-}
-
-type Snapshot struct {
-	Core        CoreStatus     `json:"core"`
-	Connections []Connection   `json:"connections"`
-	Sessions    []Session      `json:"sessions"`
-	History     []HistoryEntry `json:"history"`
-	Forwards    []Forward      `json:"forwards"`
-	FetchedAt   string         `json:"fetched_at"`
-}
-
-type CreateSessionRequest struct {
-	Connection string `json:"connection"`
-	Name       string `json:"name"`
-	Command    string `json:"command"`
-}
-
 func NewApp() *App {
 	app := newApp(corepkg.New("127.0.0.1", 18765))
-	app.tray = newTrayController(app)
+	app.tray = tray.New(trayHost(app), trayIconPNG)
 	return app
 }
 
 func newApp(core *corepkg.Service) *App {
 	executable, _ := os.Executable()
-	return newAppWithService(core, systemservice.New(executable))
+	return newAppWithService(core, config.NewManager(executable))
 }
 
-func newAppWithService(core *corepkg.Service, service systemservice.Manager) *App {
+func newAppWithService(core *corepkg.Service, service config.Manager) *App {
 	dataDir := strings.TrimSpace(os.Getenv("TERMCP_DATA_DIR"))
 	if dataDir == "" {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -141,11 +53,26 @@ func newAppWithService(core *corepkg.Service, service systemservice.Manager) *Ap
 	}
 	return &App{
 		core:       core,
-		client:     &http.Client{Timeout: 30 * time.Second},
-		transfer:   &http.Client{},
+		bridge:     bridge.New(core),
 		service:    service,
 		dataDir:    dataDir,
 		uiLanguage: defaultUILanguage(),
+	}
+}
+
+// trayHost adapts the App to the tray package through callbacks so the tray
+// does not depend on the binding layer.
+func trayHost(app *App) tray.Host {
+	return tray.Host{
+		Context:       func() context.Context { return app.ctx },
+		Language:      app.UILanguage,
+		CoreStatus:    app.CoreStatus,
+		ServiceStatus: app.service.Status,
+		StartCore:     app.StartLocalCore,
+		StopCore:      app.StopLocalCore,
+		RestartCore:   app.RestartLocalCore,
+		SetAutostart:  app.SetCoreAutostart,
+		ShowWindow:    app.showWindow,
 	}
 }
 
@@ -214,14 +141,14 @@ func (a *App) SetUILanguage(language string) string {
 	return language
 }
 
-func (a *App) CoreStatus() CoreStatus {
+func (a *App) CoreStatus() model.CoreStatus {
 	s := a.core.Status()
-	return CoreStatus{Running: s.Running, Managed: s.Managed, Address: s.Address, State: s.State, Error: s.Error}
+	return model.CoreStatus{Running: s.Running, Managed: s.Managed, Address: s.Address, State: s.State, Error: s.Error}
 }
 
-func (a *App) GetServiceStatus() (ServiceStatus, error) {
+func (a *App) GetServiceStatus() (model.ServiceStatus, error) {
 	status, err := a.service.Status()
-	return ServiceStatus{
+	return model.ServiceStatus{
 		Supported: status.Supported, Platform: status.Platform, Installed: status.Installed,
 		Running: status.Running, Autostart: status.Autostart, PID: status.PID, Label: status.Label,
 		Definition: status.Definition, LogPath: status.LogPath, Executable: status.Executable,
@@ -229,8 +156,8 @@ func (a *App) GetServiceStatus() (ServiceStatus, error) {
 	}, err
 }
 
-func (a *App) GetSnapshot() (Snapshot, error) {
-	out := Snapshot{Core: a.CoreStatus(), Connections: []Connection{}, Sessions: []Session{}, History: []HistoryEntry{}, Forwards: []Forward{}, FetchedAt: time.Now().Format(time.RFC3339)}
+func (a *App) GetSnapshot() (model.Snapshot, error) {
+	out := model.Snapshot{Core: a.CoreStatus(), Connections: []model.Connection{}, Sessions: []model.Session{}, History: []model.HistoryEntry{}, Forwards: []model.Forward{}, FetchedAt: time.Now().Format(time.RFC3339)}
 	if !out.Core.Running {
 		if out.Core.Error == "" {
 			out.Core.Error = "Core 尚未就绪"
@@ -238,51 +165,51 @@ func (a *App) GetSnapshot() (Snapshot, error) {
 		return out, nil
 	}
 	var connections struct {
-		Connections []Connection `json:"connections"`
+		Connections []model.Connection `json:"connections"`
 	}
-	if err := a.getJSON("/api/connections", &connections); err != nil {
+	if err := a.bridge.GetJSON("/api/connections", &connections); err != nil {
 		return out, err
 	}
 	out.Connections = connections.Connections
 	var sessions struct {
-		Sessions []Session `json:"sessions"`
+		Sessions []model.Session `json:"sessions"`
 	}
-	if err := a.getJSON("/api/sessions", &sessions); err != nil {
+	if err := a.bridge.GetJSON("/api/sessions", &sessions); err != nil {
 		return out, err
 	}
 	out.Sessions = sessions.Sessions
 	for i := range out.Sessions {
 		var shellList struct {
-			Shells []Shell `json:"shells"`
+			Shells []model.Shell `json:"shells"`
 		}
-		if err := a.getJSON("/api/sessions/"+url.PathEscape(out.Sessions[i].ID)+"/shells", &shellList); err == nil {
+		if err := a.bridge.GetJSON("/api/sessions/"+url.PathEscape(out.Sessions[i].ID)+"/shells", &shellList); err == nil {
 			out.Sessions[i].Shells = shellList.Shells
 		}
 		if out.Sessions[i].Shells == nil {
-			out.Sessions[i].Shells = []Shell{}
+			out.Sessions[i].Shells = []model.Shell{}
 		}
 	}
 	var history struct {
-		Sessions []HistoryEntry `json:"sessions"`
+		Sessions []model.HistoryEntry `json:"sessions"`
 	}
-	if a.getJSON("/api/history", &history) == nil {
+	if a.bridge.GetJSON("/api/history", &history) == nil {
 		out.History = history.Sessions
 	}
 	var forwards struct {
-		Forwards []Forward `json:"forwards"`
+		Forwards []model.Forward `json:"forwards"`
 	}
-	if a.getJSON("/api/forwards", &forwards) == nil {
+	if a.bridge.GetJSON("/api/forwards", &forwards) == nil {
 		out.Forwards = forwards.Forwards
 	}
 	return out, nil
 }
 
-func (a *App) CreateSession(req CreateSessionRequest) error {
+func (a *App) CreateSession(req model.CreateSessionRequest) error {
 	if strings.TrimSpace(req.Connection) == "" {
 		return errors.New("请选择连接配置")
 	}
 	body := map[string]any{"ssh_config": req.Connection, "name": strings.TrimSpace(req.Name), "command": strings.TrimSpace(req.Command), "mode": "pty", "rows": 24, "cols": 100}
-	return a.doJSON(http.MethodPost, "/api/sessions", body, nil)
+	return a.bridge.DoJSON(http.MethodPost, "/api/sessions", body, nil)
 }
 
 func (a *App) CreateShell(sessionID, name string) error {
@@ -290,11 +217,11 @@ func (a *App) CreateShell(sessionID, name string) error {
 		return errors.New("缺少会话 ID")
 	}
 	body := map[string]any{"name": strings.TrimSpace(name), "mode": "pty", "rows": 24, "cols": 100}
-	return a.doJSON(http.MethodPost, "/api/sessions/"+url.PathEscape(sessionID)+"/shells", body, nil)
+	return a.bridge.DoJSON(http.MethodPost, "/api/sessions/"+url.PathEscape(sessionID)+"/shells", body, nil)
 }
 
 func (a *App) TerminateSession(sessionID string) error {
-	return a.doJSON(http.MethodPost, "/api/sessions/"+url.PathEscape(sessionID)+"/terminate", nil, nil)
+	return a.bridge.DoJSON(http.MethodPost, "/api/sessions/"+url.PathEscape(sessionID)+"/terminate", nil, nil)
 }
 
 func (a *App) RestartCore() error {
@@ -393,39 +320,36 @@ func (a *App) SetCoreAutostart(enabled bool) error {
 	return a.service.SetAutostart(enabled)
 }
 
-func (a *App) getJSON(path string, target any) error {
-	return a.doJSON(http.MethodGet, path, nil, target)
+func (a *App) API(input model.APIRequest) (model.APIResponse, error) {
+	return a.bridge.API(input)
 }
 
-func (a *App) doJSON(method, path string, body any, target any) error {
-	var reader io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reader = bytes.NewReader(data)
+func (a *App) ChooseAndUploadFile(sessionID, remoteDirectory string) (model.UploadResult, error) {
+	return a.bridge.ChooseAndUploadFile(a.ctx, sessionID, remoteDirectory)
+}
+
+func (a *App) SaveAPIResource(apiPath, suggestedName string) (string, error) {
+	return a.bridge.SaveAPIResource(a.ctx, apiPath, suggestedName)
+}
+
+func (a *App) CoreWebSocketURL() string {
+	return a.bridge.WebSocketURL()
+}
+
+func (a *App) SystemFonts() []string {
+	return fonts.Families()
+}
+
+func (a *App) showWindow(section string) {
+	runtime.WindowShow(a.ctx)
+	runtime.WindowUnminimise(a.ctx)
+	if section != "" {
+		runtime.EventsEmit(a.ctx, "termcp:navigate", section)
 	}
-	req, err := http.NewRequest(method, a.core.BaseURL()+path, reader)
-	if err != nil {
-		return err
+}
+
+func (a *App) refreshTray() {
+	if a.tray != nil {
+		a.tray.Refresh()
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("Core 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
-		return fmt.Errorf("Core 返回 %s: %s", resp.Status, strings.TrimSpace(string(msg)))
-	}
-	if target != nil && resp.StatusCode != http.StatusNoContent {
-		if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
-			return fmt.Errorf("解析 Core 响应: %w", err)
-		}
-	}
-	return nil
 }

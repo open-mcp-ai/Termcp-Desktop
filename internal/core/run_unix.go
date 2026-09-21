@@ -1,6 +1,6 @@
 //go:build !windows
 
-package main
+package core
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 	"syscall"
 )
 
-func runPlatformCoreService(start, stop func() error) error {
+func runPlatform(start, stop func() error) error {
 	if err := start(); err != nil {
 		return err
 	}

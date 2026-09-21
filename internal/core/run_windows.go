@@ -1,23 +1,23 @@
 //go:build windows
 
-package main
+package core
 
 import (
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/open-mcp-ai/termcp/gui/internal/systemservice"
+	appconfig "github.com/open-mcp-ai/termcp/gui/internal/config"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 )
 
-type coreServiceHandler struct {
+type serviceHandler struct {
 	start func() error
 	stop  func() error
 }
 
-func runPlatformCoreService(start, stop func() error) error {
+func runPlatform(start, stop func() error) error {
 	isService, err := svc.IsWindowsService()
 	if err != nil {
 		return err
@@ -32,11 +32,11 @@ func runPlatformCoreService(start, stop func() error) error {
 		<-signals
 		return stop()
 	}
-	return svc.Run(systemservice.WindowsServiceName, &coreServiceHandler{start: start, stop: stop})
+	return svc.Run(appconfig.WindowsServiceName, &serviceHandler{start: start, stop: stop})
 }
 
-func (h *coreServiceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, statuses chan<- svc.Status) (bool, uint32) {
-	logger, _ := eventlog.Open(systemservice.WindowsServiceName)
+func (h *serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, statuses chan<- svc.Status) (bool, uint32) {
+	logger, _ := eventlog.Open(appconfig.WindowsServiceName)
 	if logger != nil {
 		defer logger.Close()
 	}

@@ -1,4 +1,4 @@
-package systemservice
+package config
 
 import "errors"
 

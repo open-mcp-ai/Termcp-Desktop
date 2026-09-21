@@ -1,6 +1,6 @@
 //go:build darwin
 
-package systemservice
+package config
 
 import (
 	"bytes"

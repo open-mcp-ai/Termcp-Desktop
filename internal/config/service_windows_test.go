@@ -1,6 +1,6 @@
 //go:build windows
 
-package systemservice
+package config
 
 import "testing"
 

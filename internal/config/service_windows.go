@@ -1,13 +1,12 @@
 //go:build windows
 
-package systemservice
+package config
 
 import (
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -24,7 +23,7 @@ type windowsManager struct {
 }
 
 func newPlatformManager(executable string) Manager {
-	return &windowsManager{executable: executable, dataDir: windowsCoreDataDir()}
+	return &windowsManager{executable: executable, dataDir: DataDir()}
 }
 
 func (m *windowsManager) Status() (Status, error) {
@@ -269,17 +268,6 @@ func waitWindowsState(service *mgr.Service, expected svc.State, timeout time.Dur
 func windowsCommandLine(executable, dataDir string) string {
 	quote := func(value string) string { return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"` }
 	return quote(executable) + ` --core-service --core-data-dir ` + quote(dataDir)
-}
-
-func windowsCoreDataDir() string {
-	if configured := strings.TrimSpace(os.Getenv("TERMCP_DATA_DIR")); configured != "" {
-		return filepath.Clean(configured)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return `.termcp`
-	}
-	return filepath.Join(home, ".termcp")
 }
 
 func grantWindowsDataAccess(dataDir string) error {
