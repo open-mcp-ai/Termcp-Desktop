@@ -97,7 +97,13 @@ jobs:
 
       - name: Build macOS application
         if: runner.os == 'macOS'
-        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform darwin/arm64
+        run: |
+          go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform darwin/arm64
+          staging="$(mktemp -d)"
+          cp -R build/bin/Termcp.app "$staging/Termcp.app"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname Termcp -srcfolder "$staging" -ov -format UDZO build/bin/Termcp.dmg
+          rm -rf "$staging"
 
       - name: Verify Windows installer exists
         if: runner.os == 'Windows'
