@@ -1,76 +1,19 @@
 import './styles.css';
 import './theme.css';
+import './features/workspace/workspace.css';
+import './ui/feedback.css';
 import { core } from './core.js';
 import { getAppearance, setAppearance } from './appearance.js';
-import { getLanguage, localizeDOM, setLanguage, t } from './i18n.js';
+import { getLanguage, localizeDOM, setLanguage, t } from './i18n/index.js';
 import { TerminalController } from './terminal.js';
 
-const icons = {
-  resources: '<circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="m9.2 9.2 5.6 5.6M14 7h6v6"/>',
-  sessions: '<rect x="4" y="4" width="14" height="12" rx="2"/><path d="M8 20h12V8M8 9l2 2-2 2m5 0h2"/>',
-  history: '<circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2M4 5v4h4"/>',
-  terminal: '<path d="m5 7 4 5-4 5m7 0h7"/>',
-  core: '<path d="M8 3h8v4h4v10h-4v4H8v-4H4V7h4z"/><circle cx="12" cy="12" r="3"/>',
-  service: '<rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h5M12 17h5"/>',
-  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3m-2.6-6.4-2.1 2.1M7.7 16.3l-2.1 2.1m12.8 0-2.1-2.1M7.7 7.7 5.6 5.6"/>',
-  refresh: '<path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-2l2 2M18 17a7 7 0 0 1-12 2l-2-2"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  search: '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
-  chevron: '<path d="m9 6 6 6-6 6"/>',
-  edit: '<path d="m4 20 4-1 11-11-3-3L5 16z"/><path d="m14 6 3 3"/>',
-  trash: '<path d="M5 7h14M9 7V4h6v3m-8 0 1 13h8l1-13"/>',
-  split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
-  folder: '<path d="M3 6h7l2 2h9v11H3z"/>',
-  forward: '<path d="M5 7h11m0 0-3-3m3 3-3 3M19 17H8m0 0 3-3m-3 3 3 3"/>',
-  bell: '<path d="M6 16h12l-2-3V9a4 4 0 0 0-8 0v4z"/><path d="M10 19h4"/>',
-  download: '<path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/>',
-  collapse: '<path d="m14 7-5 5 5 5"/>',
-  expand: '<path d="m10 7 5 5-5 5"/>',
-  copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
-  external: '<path d="M14 4h6v6m0-6-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/>',
-};
+import { dot, encode, esc, fmtSize, icon, joinPath, parentPath } from './ui/render.js';
 
-const icon = (name, size = 17) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || ''}</svg>`;
-const esc = (value = '') => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-const dot = (status = 'running') => `<i class="status-dot ${esc(status)}"></i>`;
-const encode = value => encodeURIComponent(String(value));
-const fmtSize = bytes => {
-  let size = Number(bytes || 0); const units = ['B', 'KB', 'MB', 'GB', 'TB']; let index = 0;
-  while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; }
-  return `${index ? size.toFixed(1) : size} ${units[index]}`;
-};
-const parentPath = value => {
-  const clean = String(value || '/').replace(/\/+$/, '') || '/';
-  if (clean === '/') return '/';
-  const parts = clean.split('/'); parts.pop(); return parts.join('/') || '/';
-};
-const joinPath = (base, name) => `${String(base || '/').replace(/\/+$/, '')}/${name}`.replace(/^\/+/, '/');
+import { connectionFormToTOML, connectionProfileFromTOML, emptyConnectionProfile } from './features/connections/profile.js';
+import { loadWorkspaceState, reconcileWorkspaceState, removeShellFromWorkspace, saveCollapsedGroups as persistCollapsedGroups, saveWorkspaceState, selectShellTab } from './features/workspace/model.js';
+import { renderSessionContextMenu, renderTerminalContextMenu, renderWorkspacePage } from './features/workspace/view.js';
 
-function loadWorkspaces() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem('termcp-desktop-workspaces') || '[]');
-    if (Array.isArray(parsed) && parsed.length) return parsed;
-  } catch {}
-  return [];
-}
-
-function loadClosedSessionTabs() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem('termcp-desktop-closed-session-tabs') || '[]');
-    return new Set(Array.isArray(parsed) ? parsed : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function loadCollapsedGroups() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem('termcp-desktop-collapsed-groups') || '[]');
-    return new Set(Array.isArray(parsed) ? parsed : []);
-  } catch {
-    return new Set();
-  }
-}
+const persistedWorkspace = loadWorkspaceState();
 
 const state = {
   data: { core: { running: false, managed: false, address: 'http://127.0.0.1:18765', state: 'starting' }, connections: [], sessions: [], history: [], forwards: [] },
@@ -78,18 +21,20 @@ const state = {
   error: '',
   section: 'resources',
   filter: '',
-  selected: { type: 'core', id: 'core' },
+  selected: { type: 'connection', id: '' },
   expanded: new Set(['connection:internal']),
   dialog: null,
   appearance: getAppearance(),
   contextMenu: null,
+  terminalMenu: null,
   draggedWorkspace: '',
   draggedSession: '',
+  draggedShell: '',
   dropRegion: '',
-  workspaces: loadWorkspaces(),
-  closedSessionTabs: loadClosedSessionTabs(),
-  collapsedGroups: loadCollapsedGroups(),
-  activeWorkspace: localStorage.getItem('termcp-desktop-active-workspace') || 'workspace-main',
+  workspaces: persistedWorkspace.workspaces,
+  closedSessionTabs: persistedWorkspace.closedSessionTabs,
+  collapsedGroups: persistedWorkspace.collapsedGroups,
+  activeWorkspace: persistedWorkspace.activeWorkspace,
   inspector: { tab: 'files', path: '/', data: null, loading: false, error: '', sessionID: '', collapsed: localStorage.getItem('termcp-desktop-inspector-collapsed') === '1' },
   historyQuery: '',
   historyTranscript: '',
@@ -106,15 +51,8 @@ const terminals = new TerminalController(core, {
   notify(message) { toast(message.message || message.text || 'Core 通知'); },
 });
 
-function saveWorkspaces() {
-  localStorage.setItem('termcp-desktop-workspaces', JSON.stringify(state.workspaces));
-  localStorage.setItem('termcp-desktop-active-workspace', state.activeWorkspace);
-  localStorage.setItem('termcp-desktop-closed-session-tabs', JSON.stringify([...state.closedSessionTabs]));
-}
-
-function saveCollapsedGroups() {
-  localStorage.setItem('termcp-desktop-collapsed-groups', JSON.stringify([...state.collapsedGroups]));
-}
+function saveWorkspaces() { saveWorkspaceState(state); }
+function saveCollapsedGroups() { persistCollapsedGroups(state); }
 
 function shellCount() {
   return state.data.sessions.reduce((count, session) => count + (session.shells || []).filter(shell => shell.status === 'running').length, 0);
@@ -154,6 +92,9 @@ async function refresh({ quiet = false } = {}) {
   try {
     const [snapshot, service] = await Promise.all([core.snapshot(), core.serviceStatus()]);
     state.data = { ...snapshot, preview: core.preview, connections: snapshot.connections || [], sessions: snapshot.sessions || [], history: snapshot.history || [], forwards: snapshot.forwards || [] };
+    if (state.section === 'resources' && state.selected.type === 'connection' && !connectionByName(state.selected.id)) {
+      state.selected = { type: 'connection', id: state.data.connections[0]?.name || '' };
+    }
     state.service = { ...state.service, ...service };
     reconcileWorkspaces();
   } catch (error) {
@@ -165,37 +106,7 @@ async function refresh({ quiet = false } = {}) {
 }
 
 function reconcileWorkspaces() {
-  for (const workspace of state.workspaces) {
-    workspace.panes = (workspace.panes || []).filter(pane => shellByID(pane.shellID));
-    workspace.primarySessionID ||= workspace.panes[0]?.sessionID || '';
-    if (workspace.primarySessionID && !sessionByID(workspace.primarySessionID)) workspace.primarySessionID = workspace.panes[0]?.sessionID || '';
-    workspace.mergedSessionIDs = (workspace.mergedSessionIDs || []).filter(id => id !== workspace.primarySessionID && sessionByID(id));
-    const session = sessionByID(workspace.primarySessionID);
-    if (session) workspace.name = session.name;
-    if (!workspace.panes.some(pane => pane.shellID === workspace.activeShell)) workspace.activeShell = workspace.panes[0]?.shellID || '';
-    if (workspace.maximized && !workspace.panes.some(pane => pane.shellID === workspace.maximized)) workspace.maximized = '';
-  }
-  if (state.data.sessions.length) {
-    state.workspaces = state.workspaces.filter(workspace => workspace.panes.length > 0 && workspaceSession(workspace));
-  } else {
-    state.workspaces = state.workspaces.filter(workspace => !workspace.primarySessionID);
-  }
-  const covered = new Set(state.workspaces.flatMap(workspace => [workspace.primarySessionID, ...(workspace.mergedSessionIDs || [])]).filter(Boolean));
-  for (const session of state.data.sessions) {
-    const shell = (session.shells || []).find(item => item.status === 'running') || session.shells?.[0];
-    if (!shell || covered.has(session.id) || state.closedSessionTabs.has(session.id)) continue;
-    state.workspaces.push({
-      id: `session-tab-${session.id}`,
-      name: session.name,
-      primarySessionID: session.id,
-      panes: [{ shellID: shell.id, sessionID: session.id }],
-      activeShell: shell.id,
-      maximized: '',
-      layout: 'grid',
-    });
-  }
-  if (!state.workspaces.some(workspace => workspace.id === state.activeWorkspace)) state.activeWorkspace = state.workspaces[0]?.id || '';
-  saveWorkspaces();
+  reconcileWorkspaceState(state, { sessionByID, shellByID, workspaceSession });
 }
 
 function selectedResource() {
@@ -210,7 +121,7 @@ function selectedResource() {
 function rail() {
   const items = [['resources', '连接', 'resources'], ['workspace', '终端', 'terminal'], ['history', '历史', 'history'], ['service', '服务', 'service']];
   const item = ([key, label, glyph]) => `<button data-section="${key}" class="${state.section === key || (key === 'workspace' && state.section === 'sessions') ? 'active' : ''}" title="${label}" aria-label="${label}"><span>${icon(glyph, 19)}</span><small>${label}</small></button>`;
-  return `<aside class="rail"><nav aria-label="主导航">${items.map(item).join('')}</nav><div class="rail-bottom">${item(['core', 'Core', 'core'])}${item(['settings', '设置', 'settings'])}</div></aside>`;
+  return `<aside class="rail"><nav aria-label="主导航">${items.map(item).join('')}</nav><div class="rail-bottom">${item(['settings', '设置', 'settings'])}</div></aside>`;
 }
 
 function explorer() {
@@ -239,9 +150,6 @@ function tree(query) {
   if (state.section === 'service') {
     const service = state.service;
     return group('本机服务', `<button class="tree-row leaf selected" data-section="service">${icon('service', 13)}<span><b>Core 系统服务</b><small>${service.installed ? (service.running ? '已注册 · 运行中' : '已注册 · 已停止') : '未注册'}</small></span>${dot(service.running ? 'running' : 'error')}</button>`);
-  }
-  if (state.section === 'core') {
-    return group('本机 Core', `<button class="tree-row leaf selected" data-section="core">${icon('core', 14)}<span><b>Core 管理</b><small>${state.data.core.running ? '运行中' : '已停止'} · ${coreMode()}</small></span>${dot(state.data.core.running ? 'running' : 'error')}</button>`);
   }
   if (state.section === 'settings') return '<div class="tree-empty">应用、Core 与 API</div>';
   const connections = state.data.connections.filter(item => matches(`${item.name} ${item.host || ''} ${item.user || ''}`, query));
@@ -274,16 +182,10 @@ function content() {
   if (state.section === 'workspace') return workspacePage();
   if (state.section === 'service') return servicePage();
   if (state.section === 'settings') return settingsPage();
-  if (state.section === 'core') return corePage(state.data.core);
   if (state.section === 'history' && state.selected.type !== 'history') return historyIndexPage();
   const resource = selectedResource();
-  const pages = { core: corePage, connection: connectionPage, session: sessionPage, shell: shellPage, history: historyPage };
+  const pages = { connection: connectionPage, session: sessionPage, shell: shellPage, history: historyPage };
   return (pages[state.selected.type] || emptyPage)(resource);
-}
-
-function corePage(status) {
-  const restart = status.running ? button(`${icon('refresh', 14)}重启 Core`, 'restart-core') : button('启动 Core', 'start-core', 'primary');
-  return `${header('Local Core', 'CORE INSTANCE', `${button(`${icon('plus', 14)}新建连接`, 'new-connection')}${restart}`)}<div class="metrics"><article><span>运行状态</span><b>${dot(status.running ? 'running' : 'error')}${status.running ? '运行中' : '已停止'}</b><small>${coreMode()}</small></article><article><span>活跃会话</span><strong>${state.data.sessions.length}</strong><small>${shellCount()} 个运行中 Shell</small></article><article><span>端口转发</span><strong>${state.data.forwards.length}</strong><small>跟随会话生命周期</small></article></div><section class="panel core-overview"><div><span>本机服务地址</span><code>${esc(status.address)}</code></div><div><span>运行模式</span><b>${coreMode()}</b></div><div><span>事件通道</span><b>${esc(state.wsStatus)}</b></div></section>${resourceGrid()}`;
 }
 
 function servicePage() {
@@ -297,11 +199,6 @@ function servicePage() {
   const supportNotice = service.supported ? '' : '<div class="error-banner">当前平台不支持系统服务管理。</div>';
   const autostartScope = service.platform === 'windows' ? '跟随系统启动' : '跟随当前用户登录启动';
   return `${header('Core 系统服务', 'LOCAL SERVICE', actions)}${supportNotice}<div class="service-metrics"><article><span>注册状态</span><b>${registered ? '已注册' : '未注册'}</b><small>${esc(platform)}</small></article><article><span>进程状态</span><b>${dot(service.running ? 'running' : 'error')}${service.running ? '运行中' : '已停止'}</b><small>${service.pid ? `PID ${service.pid}` : '没有服务进程'}</small></article><article><span>开机自启</span><b>${service.autostart ? '已开启' : '已关闭'}</b><small>${autostartScope}</small></article></div><section class="panel service-control"><div class="service-control-main"><span class="service-symbol">${icon('service', 25)}</span><div><b>本机 termcp Core</b><small>固定监听 127.0.0.1:18765，由 Termcp 的同一可执行文件提供后台服务。</small></div>${registered ? `<label class="switch"><input type="checkbox" data-service-autostart ${service.autostart ? 'checked' : ''}><span></span><em>开机自启</em></label>` : ''}</div><dl><div><dt>服务标识</dt><dd><code>${esc(service.label || '—')}</code></dd></div><div><dt>管理方式</dt><dd>${esc(service.description || platform)}</dd></div><div><dt>持久化目录</dt><dd><code>${esc(service.data_dir || '~/.termcp')}</code></dd></div><div><dt>服务定义</dt><dd><code>${esc(service.definition || '—')}</code></dd></div><div><dt>可执行文件</dt><dd><code>${esc(service.executable || '—')}</code></dd></div><div><dt>日志</dt><dd><code>${esc(service.log_path || (service.platform === 'windows' ? 'Windows Event Log' : '—'))}</code></dd></div></dl></section><div class="service-note"><b>本机管理边界</b><p>Termcp 只管理本机 Core。注册服务后，关闭桌面窗口不会停止 Core；卸载服务会自动切回应用内运行。SSH 主机仍作为连接资源由本机 Core 管理。</p></div>`;
-}
-
-function resourceGrid() {
-  const rows = [['⌁', state.data.connections.length, '连接配置'], ['▣', state.data.sessions.length, '活跃会话'], ['›_', shellCount(), '运行中 Shell'], ['◷', state.data.history.length, '历史记录']];
-  return `<div class="section-title"><h2>资源总览</h2><button class="text-btn" data-section="resources">在树中查看</button></div><div class="resource-grid">${rows.map(row => `<article><span class="resource-big">${row[0]}</span><div><b>${row[1]}</b><small>${row[2]}</small></div></article>`).join('')}</div>`;
 }
 
 function connectionPage(connection) {
@@ -337,36 +234,36 @@ function historyPage(item) {
   return `${header(item.name, 'SESSION HISTORY', `${button(`${icon('edit', 14)}编辑`, 'edit-history', '', `data-id="${esc(item.id)}"`)}${button('查看正文', 'load-transcript', '', `data-id="${esc(item.id)}"`)}${button(`${icon('download', 14)}导出正文`, 'export-transcript', '', `data-id="${esc(item.id)}"`)}${button('导出截图', 'export-screenshot', '', `data-id="${esc(item.id)}"`)}${button(`${icon('trash', 14)}删除`, 'delete-history', 'danger', `data-id="${esc(item.id)}"`)}`)}<section class="panel history-detail"><span class="archive-badge">只读归档</span><dl><div><dt>连接</dt><dd>${esc(item.ssh_endpoint || 'remote')}</dd></div><div><dt>原因</dt><dd>${esc(item.reason || item.status || 'archived')}</dd></div><div><dt>标签</dt><dd>${(item.tags || []).map(tag => `<em class="tag">${esc(tag)}</em>`).join(' ') || '—'}</dd></div><div><dt>备注</dt><dd>${esc(item.notes || '—')}</dd></div></dl></section><div class="section-title"><h2>历史正文</h2><span>只读</span></div>${transcript}`;
 }
 
+function coreSettingsCard() {
+  const status = state.data.core;
+  const runtimeAction = status.running
+    ? `${button('停止 Core', 'stop-core')}${button(`${icon('refresh', 14)}重启 Core`, 'restart-core', 'primary')}`
+    : button('启动 Core', 'start-core', 'primary');
+  const metrics = [
+    ['连接配置', state.data.connections.length],
+    ['活跃会话', state.data.sessions.length],
+    ['运行中 Shell', shellCount()],
+    ['端口转发', state.data.forwards.length],
+    ['历史记录', state.data.history.length],
+  ];
+  return `<section class="settings-card core-settings-card" id="core-settings"><header><div><span>LOCAL CORE</span><h2>Core 管理</h2></div><div class="core-settings-actions">${button(`${icon('plus', 14)}新建连接`, 'new-connection')}${runtimeAction}</div></header><div class="core-settings-runtime"><div class="core-runtime-state">${dot(status.running ? 'running' : 'error')}<span><b>${status.running ? '运行中' : '已停止'}</b><small>${coreMode()}</small></span></div><dl><div><dt>本机服务地址</dt><dd><code>${esc(status.address || 'http://127.0.0.1:18765')}</code></dd></div><div><dt>运行模式</dt><dd>${coreMode()}</dd></div><div><dt>事件通道</dt><dd>${esc(state.wsStatus)}</dd></div><div><dt>系统服务</dt><dd><button class="setting-link" data-section="service">${state.service.installed ? '已注册' : '未注册'} ${icon('chevron', 14)}</button></dd></div></dl></div><div class="core-settings-metrics">${metrics.map(([label, value]) => `<article><strong>${value}</strong><span>${label}</span></article>`).join('')}</div></section>`;
+}
+
 function settingsPage() {
   const base = state.data.core.address || 'http://127.0.0.1:18765';
   const mcp = JSON.stringify({ mcpServers: { termcp: { url: `${base}/stream` } } }, null, 2);
   const appearance = state.appearance;
   const fonts = [...new Set(['system-ui', ...state.systemFonts.items])];
   const fontStatus = state.systemFonts.loading ? '正在读取系统字体…' : state.systemFonts.error ? '无法读取系统字体，可直接输入字体名称。' : `已找到 ${Math.max(0, fonts.length - 1)} 个系统字体`;
-  return `${header('设置', 'TERMCP DESKTOP', button(`${icon('refresh', 14)}刷新`, 'refresh'))}<div class="settings-grid"><section class="settings-card appearance-card"><header><div><span>APPEARANCE</span><h2>界面外观</h2></div><small>即时生效</small></header><div class="setting-row"><label><b>主题</b><small>浅色与深色使用同一套中性色阶。</small></label><select data-appearance="theme"><option value="light" ${appearance.theme === 'light' ? 'selected' : ''}>浅色</option><option value="dark" ${appearance.theme === 'dark' ? 'selected' : ''}>深色</option></select></div><div class="setting-row"><label><b>字号</b><small>使用明确的像素值，同时应用到终端。</small></label><div class="font-size-control"><select data-appearance="fontSize">${Array.from({ length: 9 }, (_, index) => index + 12).map(size => `<option value="${size}" ${appearance.fontSize === size ? 'selected' : ''}>${size}</option>`).join('')}</select><span>px</span></div></div><div class="setting-row font-setting"><label><b>系统字体</b><small>${fontStatus}</small></label><input list="system-font-families" value="${esc(appearance.fontFamily)}" data-appearance="fontFamily" data-font-family placeholder="搜索或输入字体名称"><datalist id="system-font-families">${fonts.map(font => `<option value="${esc(font)}">`).join('')}</datalist></div><div class="font-preview" data-font-preview><span>Aa 文</span><p>Termcp 让本机 Core、SSH 会话和文件管理保持在一个清晰的工作流中。</p><code>debian@host:~$ termcp</code></div></section><section class="settings-card"><header><div><span>APPLICATION</span><h2>应用设置</h2></div></header><div class="setting-row"><label><b>界面语言</b><small>同步更新应用界面与系统托盘。</small></label><select data-language data-i18n-ignore><option value="zh-CN" ${getLanguage() === 'zh-CN' ? 'selected' : ''}>简体中文</option><option value="en" ${getLanguage() === 'en' ? 'selected' : ''}>English</option></select></div><div class="setting-row"><label><b>Core 运行方式</b><small>管理当前电脑上的 termcp Core。</small></label><button class="setting-link" data-section="core">${coreMode()} ${icon('chevron', 14)}</button></div><div class="setting-row"><label><b>系统服务</b><small>注册、开机自启和后台运行。</small></label><button class="setting-link" data-section="service">${state.service.installed ? '已注册' : '未注册'} ${icon('chevron', 14)}</button></div><div class="setting-row"><label><b>终端事件通道</b><small>终端输出、输入与 resize 共用 WebSocket。</small></label><em>${esc(state.wsStatus)}</em></div><div class="setting-row"><label><b>渲染引擎</b><small>Wails 系统 WebView。</small></label><em>Native WebView</em></div></section><section class="settings-card developer-card"><header><div><span>INTEGRATIONS</span><h2>MCP 接入</h2></div><small>Streamable HTTP</small></header><div class="mcp-endpoint"><div><span>本机服务地址</span><code>${esc(base)}/stream</code></div><button data-copy="${esc(`${base}/stream`)}">复制地址</button></div><pre>${esc(mcp)}</pre><button class="button" data-copy="${esc(mcp)}">复制 MCP 配置</button></section></div>`;
+  const appearanceCard = `<section class="settings-card appearance-card"><header><div><span>APPEARANCE</span><h2>界面外观</h2></div><small>即时生效</small></header><div class="setting-row"><label><b>主题</b><small>浅色与深色使用同一套中性色阶。</small></label><select data-appearance="theme"><option value="light" ${appearance.theme === 'light' ? 'selected' : ''}>浅色</option><option value="dark" ${appearance.theme === 'dark' ? 'selected' : ''}>深色</option></select></div><div class="setting-row"><label><b>字号</b><small>使用明确的像素值，同时应用到终端。</small></label><div class="font-size-control"><select data-appearance="fontSize">${Array.from({ length: 9 }, (_, index) => index + 12).map(size => `<option value="${size}" ${appearance.fontSize === size ? 'selected' : ''}>${size}</option>`).join('')}</select><span>px</span></div></div><div class="setting-row font-setting"><label><b>系统字体</b><small>${fontStatus}</small></label><input list="system-font-families" value="${esc(appearance.fontFamily)}" data-appearance="fontFamily" data-font-family placeholder="搜索或输入字体名称"><datalist id="system-font-families">${fonts.map(font => `<option value="${esc(font)}">`).join('')}</datalist></div><div class="font-preview" data-font-preview><span>Aa 文</span><p>Termcp 让本机 Core、SSH 会话和文件管理保持在一个清晰的工作流中。</p><code>debian@host:~$ termcp</code></div></section>`;
+  const applicationCard = `<section class="settings-card"><header><div><span>APPLICATION</span><h2>应用设置</h2></div></header><div class="setting-row"><label><b>界面语言</b><small>同步更新应用界面与系统托盘。</small></label><select data-language data-i18n-ignore><option value="zh-CN" ${getLanguage() === 'zh-CN' ? 'selected' : ''}>简体中文</option><option value="en" ${getLanguage() === 'en' ? 'selected' : ''}>English</option></select></div><div class="setting-row"><label><b>Core 运行方式</b><small>当前电脑上的 termcp Core 运行模式。</small></label><em>${coreMode()}</em></div><div class="setting-row"><label><b>系统服务</b><small>注册、开机自启和后台运行。</small></label><button class="setting-link" data-section="service">${state.service.installed ? '已注册' : '未注册'} ${icon('chevron', 14)}</button></div><div class="setting-row"><label><b>终端事件通道</b><small>终端输出、输入与 resize 共用 WebSocket。</small></label><em>${esc(state.wsStatus)}</em></div><div class="setting-row"><label><b>渲染引擎</b><small>Wails 系统 WebView。</small></label><em>Native WebView</em></div></section>`;
+  const integrationCard = `<section class="settings-card developer-card"><header><div><span>INTEGRATIONS</span><h2>MCP 接入</h2></div><small>Streamable HTTP</small></header><div class="mcp-endpoint"><div><span>本机服务地址</span><code>${esc(base)}/stream</code></div><button data-copy="${esc(`${base}/stream`)}">复制地址</button></div><pre>${esc(mcp)}</pre><button class="button" data-copy="${esc(mcp)}">复制 MCP 配置</button></section>`;
+  return `${header('设置', 'TERMCP DESKTOP', button(`${icon('refresh', 14)}刷新`, 'refresh'))}<div class="settings-grid">${coreSettingsCard()}${appearanceCard}${applicationCard}${integrationCard}</div>`;
 }
 function emptyPage() { return `${header('选择资源', 'RESOURCE EXPLORER')}<div class="empty-state large">从左侧选择连接、会话、Shell 或历史记录。</div>`; }
 
 function workspacePage() {
-  const workspace = activeWorkspace();
-  workspace.layout ||= 'grid';
-  const panes = workspace.maximized ? workspace.panes.filter(pane => pane.shellID === workspace.maximized) : workspace.panes;
-  const tabs = state.workspaces.map(item => {
-    const session = workspaceSession(item);
-    return `<button class="workspace-tab ${item.id === workspace.id ? 'active' : ''}" data-workspace="${esc(item.id)}" data-workspace-drag="${esc(item.id)}" data-session-drag="${esc(session?.id || '')}" draggable="true" title="拖动会话标签排序，拖到终端区域可自动分屏">${dot(session?.status || 'archived')}<span>${esc(session?.name || item.name || '新会话')}</span><small>${esc(session?.ssh_endpoint || 'local')}</small>${state.workspaces.length > 1 ? `<i data-close-workspace="${esc(item.id)}" title="关闭标签">×</i>` : ''}</button>`;
-  }).join('');
-  const dropClass = state.dropRegion ? `drop-${state.dropRegion}` : '';
-  const terminal = panes.length
-    ? `<div class="terminal-workspace layout-${esc(workspace.layout)} ${workspace.maximized ? 'maximized' : ''} ${dropClass}" data-pane-count="${panes.length}" data-session-drop-zone>${panes.map(pane => terminalPane(pane, workspace)).join('')}<div class="session-drop-hint"><span>${state.dropRegion === 'top' ? '在上方分屏' : state.dropRegion === 'bottom' ? '在下方分屏' : state.dropRegion === 'left' ? '在左侧分屏' : '在右侧分屏'}</span></div></div>`
-    : `<div class="workspace-empty ${dropClass}" data-session-drop-zone><span>›_</span><h2>还没有打开的会话</h2><p>前往“连接”栏目，双击连接配置即可创建并打开新会话。</p><button class="button primary" data-section="resources">打开连接配置</button><div class="session-drop-hint"><span>松开以打开会话</span></div></div>`;
-  return `<div class="workspace-page ${state.inspector.collapsed ? 'inspector-collapsed' : ''}"><div class="workspace-tabs"><div class="workspace-tab-scroll">${tabs}</div><button class="new-workspace-tab" data-action="new-session" title="新建 SSH 会话" aria-label="新建 SSH 会话">${icon('plus', 16)}</button></div>${terminal}<aside class="workspace-inspector ${state.inspector.collapsed ? 'collapsed' : ''}">${inspectorShell()}</aside></div>`;
-}
-
-function terminalPane(pane, workspace) {
-  const item = shellByID(pane.shellID);
-  if (!item) return '';
-  const active = workspace.activeShell === pane.shellID;
-  return `<section class="terminal-pane ${active ? 'active' : ''}" data-pane-shell="${esc(pane.shellID)}" data-pane-activate="${esc(pane.shellID)}"><div class="terminal-host" data-terminal-shell="${esc(pane.shellID)}"></div></section>`;
+  return renderWorkspacePage({ state, activeWorkspace, workspaceSession, shellByID, inspectorShell });
 }
 
 function inspectorShell() {
@@ -412,6 +309,8 @@ function formatForward(forward) {
   return `${forward.local_host || '127.0.0.1'}:${forward.local_port || 0} → ${forward.remote_host || ''}:${forward.remote_port || 0}`;
 }
 
+import { activateConnectionTab, connectionEditor, setConnectionAuthMode, setJumpEnabled, setTrustUnknownHost, validateConnectionForm } from './features/connections/editor.js';
+
 function modal() {
   const dialog = state.dialog;
   if (!dialog) return '';
@@ -429,8 +328,8 @@ function modal() {
     footer = `<button type="button" class="button" data-close>取消</button><button class="button primary" type="submit">创建</button>`;
   } else if (dialog.type === 'connection') {
     title = dialog.original ? `编辑 ${dialog.original}` : '新建 SSH 连接'; eyebrow = 'SSH PROFILE';
-    body = `<label>配置名称<input name="name" value="${esc(dialog.name || '')}" pattern="[A-Za-z0-9_-]+" required ${dialog.original ? '' : 'autofocus'}></label><label>配置内容（TOML）<textarea name="config" rows="16" spellcheck="false" required>${esc(dialog.raw || '')}</textarea></label><div class="modal-result">${esc(dialog.result || '密码和私钥只写入 Core 配置；列表接口不会返回凭据。')}</div>`;
-    footer = `<button type="button" class="button" data-action="test-editor-connection">测试连接</button><span class="modal-spacer"></span><button type="button" class="button" data-close>取消</button><button class="button primary" type="submit">保存</button>`;
+    body = connectionEditor(dialog.profile || emptyConnectionProfile(dialog.name), dialog.loading);
+    footer = `<div class="modal-result" role="status">${esc(dialog.result || (dialog.loading ? '正在读取连接配置…' : '凭据仅保存在本机 ~/.termcp 目录中。'))}</div><button type="button" class="button" data-action="test-editor-connection" ${dialog.loading ? 'disabled' : ''}>测试连接</button><span class="modal-spacer"></span><button type="button" class="button" data-close>取消</button><button class="button primary" type="submit" ${dialog.loading ? 'disabled' : ''}>保存</button>`;
   } else if (dialog.type === 'forward') {
     title = '新建端口转发'; eyebrow = 'SSH FORWARD';
     body = `<input type="hidden" name="session" value="${esc(dialog.session)}"><label>方向<select name="direction"><option value="local">Local · -L</option><option value="remote">Remote · -R</option><option value="dynamic">Dynamic · -D</option></select></label><div class="form-grid"><label>本地地址<input name="local_host" value="127.0.0.1"></label><label>本地端口<input name="local_port" type="number" min="0" max="65535" value="0"></label><label>远端地址<input name="remote_host" value="127.0.0.1"></label><label>远端端口<input name="remote_port" type="number" min="0" max="65535" value="80"></label></div>`;
@@ -456,27 +355,22 @@ function modal() {
     title = dialog.title; eyebrow = 'CONFIRM'; body = `<p>${esc(dialog.message)}</p>`;
     footer = `<button type="button" class="button" data-close>取消</button><button type="button" class="button danger" data-confirm="${esc(dialog.action)}" data-payload="${esc(dialog.payload || '')}">${esc(dialog.confirm || '确认')}</button>`;
   }
-  return `<div class="modal-backdrop"><form class="modal ${dialog.type === 'connection' ? 'wide' : ''}" data-form="${esc(dialog.type)}"><header><div><span>${eyebrow}</span><h2>${esc(title)}</h2></div><button type="button" class="icon-btn" data-close>×</button></header>${body}<footer>${footer}</footer></form></div>`;
+  return `<div class="modal-backdrop"><form class="modal ${dialog.type === 'connection' ? 'wide connection-modal' : ''}" data-form="${esc(dialog.type)}" autocomplete="off" ${dialog.type === 'connection' ? 'novalidate' : ''}><header><div><span>${eyebrow}</span><h2>${esc(title)}</h2></div><button type="button" class="icon-btn" data-close>×</button></header>${body}<footer>${footer}</footer></form></div>`;
 }
 
-function sessionContextMenu() {
-  const menu = state.contextMenu;
-  const session = menu && sessionByID(menu.sessionID);
-  if (!session) return '';
-  const firstShell = (session.shells || []).find(shell => shell.status === 'running') || (session.shells || [])[0];
-  return `<div class="session-context-menu" role="menu" style="left:${menu.x}px;top:${menu.y}px" data-session-menu="${esc(session.id)}"><header>${dot(session.status)}<span><b>${esc(session.name)}</b><small>${esc(session.ssh_endpoint || session.mode)}</small></span></header><button role="menuitem" data-context-action="open" ${firstShell ? `data-shell="${esc(firstShell.id)}"` : ''}>${icon('external', 15)}<span>${firstShell ? '在工作台打开' : '新建 Shell'}</span></button><button role="menuitem" data-context-action="new-shell">${icon('plus', 15)}<span>新建 Shell</span></button><button role="menuitem" data-context-action="details">${icon('sessions', 15)}<span>查看会话详情</span></button><button role="menuitem" data-context-action="rename">${icon('edit', 15)}<span>重命名</span></button><button role="menuitem" data-context-action="copy-uri">${icon('copy', 15)}<span>复制资源地址</span><kbd>termcp://</kbd></button><hr><button role="menuitem" data-context-action="terminate" class="warning" ${session.status === 'running' ? '' : 'disabled'}>${icon('trash', 15)}<span>结束并归档</span></button><button role="menuitem" data-context-action="purge" class="danger">${icon('trash', 15)}<span>永久删除</span></button></div>`;
-}
+function sessionContextMenu() { return renderSessionContextMenu({ state, sessionByID }); }
+function terminalContextMenu() { return renderTerminalContextMenu({ state, shellByID, activeWorkspace }); }
 
 function coreIndicator() {
   const status = state.data.core.running ? 'running' : 'error';
   const statusText = state.data.core.running ? 'Core 运行中' : 'Core 已停止';
-  return `<div class="core-indicator" id="core-indicator"><button data-section="core" aria-label="${statusText}">${dot(status)}<span>Core</span></button><div class="core-tooltip" role="tooltip"><header>${dot(status)}<div><b id="core-indicator-title">${statusText}</b><small>${coreMode()}</small></div></header><dl><div><dt>本机服务地址</dt><dd>${esc(state.data.core.address || '127.0.0.1:18765')}</dd></div><div><dt>终端事件通道</dt><dd id="core-channel-status">${esc(state.wsStatus)}</dd></div><div><dt>系统服务</dt><dd>${state.service.installed ? (state.service.running ? '已注册 · 运行中' : '已注册 · 已停止') : '未注册'}</dd></div><div><dt>开机自启</dt><dd>${state.service.autostart ? '已开启' : '已关闭'}</dd></div></dl><small>点击打开 Core 管理</small></div></div>`;
+  return `<div class="core-indicator" id="core-indicator"><button data-section="settings" aria-label="${statusText}">${dot(status)}<span>Core</span></button><div class="core-tooltip" role="tooltip"><header>${dot(status)}<div><b id="core-indicator-title">${statusText}</b><small>${coreMode()}</small></div></header><dl><div><dt>本机服务地址</dt><dd>${esc(state.data.core.address || '127.0.0.1:18765')}</dd></div><div><dt>终端事件通道</dt><dd id="core-channel-status">${esc(state.wsStatus)}</dd></div><div><dt>系统服务</dt><dd>${state.service.installed ? (state.service.running ? '已注册 · 运行中' : '已注册 · 已停止') : '未注册'}</dd></div><div><dt>开机自启</dt><dd>${state.service.autostart ? '已开启' : '已关闭'}</dd></div></dl><small>点击打开设置中的 Core 管理</small></div></div>`;
 }
 
 function render() {
   terminals.clear();
   const fullWidth = state.section === 'settings';
-  document.querySelector('#app').innerHTML = `<a class="skip-link" href="#main-content">跳到主要内容</a><div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>t_</span><b>Termcp</b></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="最小化">—</button><button data-window="max" aria-label="最大化窗口">□</button><button data-window="close" aria-label="隐藏到系统托盘">×</button></div></header><div class="body ${fullWidth ? 'single-content' : ''}">${rail()}${fullWidth ? '' : explorer()}<main id="main-content" class="content ${state.section === 'workspace' ? 'workspace-content' : ''} ${fullWidth ? 'settings-content' : ''}">${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">重试</button></div>` : ''}${content()}</main></div></div>${coreIndicator()}${sessionContextMenu()}${modal()}`;
+  document.querySelector('#app').innerHTML = `<a class="skip-link" href="#main-content">跳到主要内容</a><div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>t_</span><b>Termcp</b></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="最小化">—</button><button data-window="max" aria-label="最大化窗口">□</button><button data-window="close" aria-label="隐藏到系统托盘">×</button></div></header><div class="body ${fullWidth ? 'single-content' : ''}">${rail()}${fullWidth ? '' : explorer()}<main id="main-content" class="content ${state.section === 'workspace' ? 'workspace-content' : ''} ${fullWidth ? 'settings-content' : ''}">${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">重试</button></div>` : ''}${content()}</main></div></div>${coreIndicator()}${sessionContextMenu()}${terminalContextMenu()}${modal()}`;
   localizeDOM(document.querySelector('#app'));
   if (state.section === 'workspace') mountWorkspace();
   if (state.section === 'settings') {
@@ -527,16 +421,23 @@ async function loadInspector() {
 function openShell(shellID, sessionID) {
   const session = sessionByID(sessionID);
   state.closedSessionTabs.delete(sessionID);
-  let workspace = state.workspaces.find(item => item.primarySessionID === sessionID);
+  let workspace = state.workspaces.find(item => item.primarySessionID === sessionID || item.mergedSessionIDs?.includes(sessionID));
   if (!workspace) {
-    workspace = { id: `session-tab-${sessionID}-${Date.now()}`, name: session?.name || 'SSH 会话', primarySessionID: sessionID, panes: [], maximized: '', layout: 'grid' };
+    workspace = {
+      id: `session-tab-${sessionID}-${Date.now()}`,
+      name: session?.name || 'SSH 会话',
+      primarySessionID: sessionID,
+      shellTabs: (session?.shells || []).map(shell => ({ shellID: shell.id, sessionID })),
+      panes: [],
+      maximized: '',
+      layout: 'grid',
+    };
     state.workspaces.push(workspace);
   }
   state.activeWorkspace = workspace.id;
-  if (!workspace.panes.some(pane => pane.shellID === shellID)) workspace.panes.push({ shellID, sessionID });
-  if (workspace.panes.length > 2) workspace.layout = 'grid';
-  workspace.activeShell = shellID; workspace.maximized = '';
+  selectShellTab(workspace, shellID, sessionID);
   state.section = 'workspace'; state.selected = { type: 'shell', id: shellID };
+  state.inspector.path = '/'; state.inspector.data = null;
   saveWorkspaces(); render();
 }
 
@@ -572,20 +473,27 @@ function addSessionSplit(sessionID, region = 'right', sourceWorkspaceID = '', pr
   const workspace = activeWorkspace();
   if (!session || !workspace) return;
   state.closedSessionTabs.delete(sessionID);
+  if (preferredShellID && workspace.panes.some(pane => pane.shellID === preferredShellID)) {
+    toast('Shell 已在分屏中', 'warning');
+    state.draggedWorkspace = ''; state.draggedSession = ''; state.draggedShell = ''; state.dropRegion = '';
+    return;
+  }
   const shell = (session.shells || []).find(item => item.id === preferredShellID && !workspace.panes.some(pane => pane.shellID === item.id))
     || (session.shells || []).find(item => item.status === 'running' && !workspace.panes.some(pane => pane.shellID === item.id))
     || (session.shells || []).find(item => !workspace.panes.some(pane => pane.shellID === item.id));
-  if (!shell) { toast('该会话没有可添加的 Shell'); return; }
+  if (!shell) { toast('该会话没有可添加的 Shell', 'warning'); return; }
   const pane = { shellID: shell.id, sessionID: session.id };
+  workspace.shellTabs ||= [];
+  if (!workspace.shellTabs.some(tab => tab.shellID === shell.id)) workspace.shellTabs.push({ ...pane });
   if (region === 'left' || region === 'top') workspace.panes.unshift(pane);
   else workspace.panes.push(pane);
   workspace.layout = region === 'top' || region === 'bottom' ? 'rows' : 'columns';
   if (workspace.panes.length > 2) workspace.layout = 'grid';
   workspace.activeShell = shell.id;
   workspace.maximized = '';
-  workspace.mergedSessionIDs = [...new Set([...(workspace.mergedSessionIDs || []), session.id])];
+  if (session.id !== workspace.primarySessionID) workspace.mergedSessionIDs = [...new Set([...(workspace.mergedSessionIDs || []), session.id])];
   if (sourceWorkspaceID && sourceWorkspaceID !== workspace.id) state.workspaces = state.workspaces.filter(item => item.id !== sourceWorkspaceID);
-  state.draggedWorkspace = ''; state.draggedSession = ''; state.dropRegion = '';
+  state.draggedWorkspace = ''; state.draggedSession = ''; state.draggedShell = ''; state.dropRegion = '';
   saveWorkspaces(); render();
 }
 
@@ -606,42 +514,51 @@ async function loadSystemFonts() {
 function navigateToSection(section) {
   const allowed = new Set(['resources', 'workspace', 'sessions', 'history', 'service', 'core', 'settings']);
   if (!allowed.has(section)) return;
+  if (section === 'core') section = 'settings';
   state.section = section;
   if (section === 'history') state.selected = { type: 'history-index', id: '' };
   if (section === 'settings') state.selected = { type: 'settings', id: '' };
   if (section === 'service') state.selected = { type: 'service', id: 'local' };
-  if (section === 'core') state.selected = { type: 'core', id: 'core' };
   render();
 }
 
-function toast(message) {
+function toast(message, tone = 'info') {
   const element = document.querySelector('#toast');
   if (!element) return;
-  element.textContent = t(String(message)); element.hidden = false;
-  clearTimeout(toast.timer); toast.timer = setTimeout(() => { element.hidden = true; }, 3200);
+  element.textContent = t(String(message));
+  element.dataset.tone = tone;
+  element.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { element.hidden = true; }, tone === 'error' ? 6200 : 3600);
 }
 
 async function run(label, operation, options = {}) {
   try {
     const result = await operation();
-    if (label) toast(label);
+    if (label) toast(label, 'success');
     if (options.refresh !== false) await refresh({ quiet: true });
     else if (options.render) render();
     return result;
-  } catch (error) { toast(String(error)); return null; }
+  } catch (error) { toast(String(error), 'error'); return null; }
 }
 
 async function openConnectionEditor(name = '') {
-  state.dialog = { type: 'connection', name, original: name, raw: '', result: '' }; render();
+  state.dialog = { type: 'connection', name, original: name, profile: emptyConnectionProfile(name), loading: Boolean(name), result: '' }; render();
+  if (!name) return;
   try {
-    if (name) {
-      const result = await core.api('GET', `/api/connections/${encode(name)}`);
-      state.dialog.raw = result.data || result.body || '';
-    } else {
-      const result = await core.api('GET', '/api/connection-templates');
-      state.dialog.raw = result.data?.remote || '';
+    const result = await core.api('GET', `/api/connections/${encode(name)}`);
+    if (!state.dialog || state.dialog.type !== 'connection') return;
+    const profile = connectionProfileFromTOML(name, result.data || result.body || '');
+    const summary = connectionByName(name);
+    if (summary) {
+      profile.host ||= summary.host || '';
+      profile.user ||= summary.user || '';
+      profile.port ||= summary.port || 22;
+      profile.description ||= summary.description || '';
     }
-  } catch (error) { state.dialog.result = String(error); }
+    state.dialog.profile = profile;
+  } catch (error) { if (state.dialog?.type === 'connection') state.dialog.result = String(error); }
+  if (!state.dialog || state.dialog.type !== 'connection') return;
+  state.dialog.loading = false;
   render();
 }
 
@@ -656,6 +573,40 @@ function confirmDialog(title, message, action, payload, confirm = '确认') {
 }
 
 document.addEventListener('click', async event => {
+  const terminalAction = event.target.closest('[data-terminal-action]');
+  if (terminalAction) {
+    const menu = state.terminalMenu;
+    const shellID = terminalAction.closest('[data-terminal-menu]')?.dataset.terminalMenu;
+    const item = shellByID(shellID);
+    const action = terminalAction.dataset.terminalAction;
+    state.terminalMenu = null;
+    document.querySelector('.terminal-context-menu')?.remove();
+    if (!item) return;
+    try {
+      if (action === 'copy') {
+        const copied = await terminals.copy(shellID, menu?.selection || '');
+        toast(copied ? '已复制' : '没有选中的文本', copied ? 'success' : 'warning');
+      }
+      if (action === 'paste') {
+        const pasted = await terminals.paste(shellID);
+        if (!pasted) toast('剪贴板不可用', 'warning');
+      }
+      if (action === 'select-all') terminals.selectAll(shellID);
+      if (action === 'clear') terminals.clearShell(shellID);
+    } catch {
+      toast(action === 'copy' ? '复制失败' : '剪贴板不可用', 'error');
+    }
+    if (action === 'new-shell') { state.dialog = { type: 'shell', session: item.session.id }; render(); }
+    if (action === 'remove-pane') {
+      const workspace = activeWorkspace();
+      workspace.panes = workspace.panes.filter(pane => pane.shellID !== shellID);
+      workspace.maximized = '';
+      workspace.activeShell = workspace.panes[0]?.shellID || '';
+      saveWorkspaces(); render();
+    }
+    if (action === 'close') confirmDialog('关闭 Shell', '当前 Shell 进程将结束；其他 Shell 和 SSH 连接保持运行。', 'close-shell', shellID, '关闭 Shell');
+    return;
+  }
   const contextAction = event.target.closest('[data-context-action]');
   if (contextAction) {
     const sessionID = contextAction.closest('[data-session-menu]')?.dataset.sessionMenu;
@@ -677,6 +628,7 @@ document.addEventListener('click', async event => {
     if (action === 'purge') { confirmDialog('永久删除会话', '会话、消息和历史记录将永久删除。', 'purge-session', session.id, '永久删除'); return; }
   }
   if (state.contextMenu && !event.target.closest('.session-context-menu')) { state.contextMenu = null; document.querySelector('.session-context-menu')?.remove(); }
+  if (state.terminalMenu && !event.target.closest('.terminal-context-menu')) { state.terminalMenu = null; document.querySelector('.terminal-context-menu')?.remove(); }
   const groupToggle = event.target.closest('[data-group-toggle]');
   if (groupToggle) {
     const key = groupToggle.dataset.groupToggle;
@@ -710,6 +662,25 @@ document.addEventListener('click', async event => {
   }
   const target = event.target.closest('button');
   if (!target) return;
+  if (target.dataset.closeShellTab) { confirmDialog('关闭 Shell', '当前 Shell 进程将结束；其他 Shell 和 SSH 连接保持运行。', 'close-shell', target.dataset.closeShellTab, '关闭 Shell'); return; }
+  if (target.dataset.shellTab) {
+    const workspace = activeWorkspace();
+    selectShellTab(workspace, target.dataset.shellTab, target.dataset.session);
+    state.selected = { type: 'shell', id: target.dataset.shellTab };
+    state.inspector.path = '/'; state.inspector.data = null;
+    saveWorkspaces(); render(); return;
+  }
+  if (target.dataset.connectionTab) {
+    const form = target.closest('form'); const tab = target.dataset.connectionTab;
+    activateConnectionTab(form, tab);
+    return;
+  }
+  if (target.dataset.authMode) { setConnectionAuthMode(target.closest('form'), target.dataset.authScope, target.dataset.authMode); return; }
+  if (target.dataset.toggleSecret !== undefined) {
+    const input = target.closest('.secret-input')?.querySelector('input');
+    if (input) { const visible = input.type === 'text'; input.type = visible ? 'password' : 'text'; target.classList.toggle('active', !visible); target.setAttribute('aria-label', visible ? '显示密码' : '隐藏密码'); target.title = visible ? '显示密码' : '隐藏密码'; }
+    return;
+  }
   if (target.dataset.section) { navigateToSection(target.dataset.section); return; }
   if (target.dataset.connectionProfile) {
     clearTimeout(connectionClickTimer);
@@ -775,9 +746,10 @@ document.addEventListener('click', async event => {
   if (action === 'delete-history') { confirmDialog('删除历史记录', '历史正文和关联消息将永久删除。', 'delete-history', target.dataset.id, '删除'); return; }
   if (action === 'history-search') { await searchHistory(); return; }
   if (action === 'test-editor-connection') {
-    const form = target.closest('form'); const data = new FormData(form);
-    try { const result = await testConnection(data.get('config'), false); state.dialog.result = result.data?.ok ? `连接成功${result.data.latency_ms ? ` · ${result.data.latency_ms} ms` : ''}` : '测试完成'; } catch (error) { state.dialog.result = String(error); }
-    render(); return;
+    const form = target.closest('form'); if (!validateConnectionForm(form)) return;
+    const resultNode = form.querySelector('.modal-result'); target.disabled = true; if (resultNode) resultNode.textContent = t('正在测试连接…');
+    try { const result = await testConnection(connectionFormToTOML(form), false); if (resultNode) resultNode.textContent = t(result.data?.ok ? `连接成功${result.data.latency_ms ? ` · ${result.data.latency_ms} ms` : ''}` : '测试完成'); } catch (error) { if (resultNode) resultNode.textContent = String(error); }
+    target.disabled = false; return;
   }
 });
 
@@ -795,6 +767,8 @@ document.addEventListener('input', event => {
 });
 
 document.addEventListener('change', async event => {
+  if (event.target.matches('[data-jump-enabled]')) { setJumpEnabled(event.target.closest('form'), event.target.checked); return; }
+  if (event.target.matches('[data-trust-toggle]')) { setTrustUnknownHost(event.target.closest('form'), event.target.dataset.trustToggle, event.target.checked); return; }
   if (event.target.matches('[data-appearance]')) {
     state.appearance = setAppearance({ [event.target.dataset.appearance]: event.target.value });
     render();
@@ -815,7 +789,7 @@ document.addEventListener('change', async event => {
 document.addEventListener('keydown', async event => {
   if (event.key === 'Enter' && event.target.matches('[data-file-path]')) { event.preventDefault(); state.inspector.path = event.target.value.trim() || '/'; await loadInspector(); }
   if (event.key === 'Enter' && event.target.matches('[data-history-query]')) { event.preventDefault(); await searchHistory(); }
-  if (event.key === 'Escape' && (state.dialog || state.contextMenu)) { state.dialog = null; state.contextMenu = null; render(); }
+  if (event.key === 'Escape' && (state.dialog || state.contextMenu || state.terminalMenu)) { state.dialog = null; state.contextMenu = null; state.terminalMenu = null; render(); }
   if (state.section !== 'workspace' || event.target.matches('input,textarea,select')) return;
   if (event.altKey && event.shiftKey && (event.key === 'ArrowRight' || event.key === 'ArrowDown')) {
     event.preventDefault();
@@ -831,10 +805,26 @@ document.addEventListener('keydown', async event => {
 });
 
 document.addEventListener('contextmenu', event => {
+  const shellTarget = event.target.closest('[data-shell-context]');
+  if (shellTarget) {
+    event.preventDefault();
+    const shellID = shellTarget.dataset.shellContext;
+    const width = 252; const height = 310; const margin = 8;
+    state.contextMenu = null;
+    state.terminalMenu = {
+      shellID,
+      selection: terminals.selection(shellID),
+      x: Math.max(margin, Math.min(event.clientX, window.innerWidth - width - margin)),
+      y: Math.max(margin, Math.min(event.clientY, window.innerHeight - height - margin)),
+    };
+    render();
+    return;
+  }
   const node = event.target.closest('[data-session-context]');
   if (!node) return;
   event.preventDefault();
   const width = 244; const height = 326; const margin = 8;
+  state.terminalMenu = null;
   state.contextMenu = {
     sessionID: node.dataset.sessionContext,
     x: Math.max(margin, Math.min(event.clientX, window.innerWidth - width - margin)),
@@ -845,14 +835,17 @@ document.addEventListener('contextmenu', event => {
 
 document.addEventListener('dragstart', event => {
   const tab = event.target.closest('[data-workspace-drag]');
+  const shellTab = event.target.closest('[data-shell-drag]');
   const sessionNode = event.target.closest('[data-session-drag]');
-  if (!tab && !sessionNode) return;
+  if (!tab && !shellTab && !sessionNode) return;
   state.draggedWorkspace = tab?.dataset.workspaceDrag || '';
-  state.draggedSession = tab?.dataset.sessionDrag || sessionNode?.dataset.sessionDrag || '';
-  (tab || sessionNode).classList.add('dragging');
+  state.draggedShell = shellTab?.dataset.shellDrag || '';
+  state.draggedSession = shellTab?.dataset.sessionDrag || tab?.dataset.sessionDrag || sessionNode?.dataset.sessionDrag || '';
+  (tab || shellTab || sessionNode).classList.add('dragging');
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('application/x-termcp-session', state.draggedSession);
-  event.dataTransfer.setData('text/plain', state.draggedWorkspace || state.draggedSession);
+  if (state.draggedShell) event.dataTransfer.setData('application/x-termcp-shell', state.draggedShell);
+  event.dataTransfer.setData('text/plain', state.draggedWorkspace || state.draggedShell || state.draggedSession);
 });
 
 document.addEventListener('dragover', event => {
@@ -883,7 +876,7 @@ document.addEventListener('drop', event => {
   const dropZone = event.target.closest('[data-session-drop-zone]');
   if (dropZone && state.draggedSession) {
     event.preventDefault();
-    addSessionSplit(state.draggedSession, state.dropRegion || 'right', state.draggedWorkspace);
+    addSessionSplit(state.draggedSession, state.dropRegion || 'right', state.draggedWorkspace, state.draggedShell);
     return;
   }
   const tab = event.target.closest('[data-workspace-drag]');
@@ -902,7 +895,7 @@ document.addEventListener('drop', event => {
 });
 
 document.addEventListener('dragend', () => {
-  state.draggedWorkspace = ''; state.draggedSession = ''; state.dropRegion = '';
+  state.draggedWorkspace = ''; state.draggedSession = ''; state.draggedShell = ''; state.dropRegion = '';
   document.querySelectorAll('.dragging,.workspace-tab.drop-target,.drop-left,.drop-right,.drop-top,.drop-bottom').forEach(item => item.classList.remove('dragging', 'drop-target', 'drop-left', 'drop-right', 'drop-top', 'drop-bottom'));
 });
 
@@ -926,9 +919,11 @@ document.addEventListener('submit', async event => {
     }, { refresh: false }); return;
   }
   if (type === 'connection') {
+    if (!validateConnectionForm(form)) return;
     const name = String(data.get('name')).trim(); const original = state.dialog.original;
+    const config = connectionFormToTOML(form);
     state.dialog = null;
-    await run('连接配置已保存', () => core.api('PUT', `/api/connections/${encode(name)}${original && original !== name ? `?from=${encode(original)}` : ''}`, data.get('config'), 'text/plain; charset=utf-8')); return;
+    await run('连接配置已保存', () => core.api('PUT', `/api/connections/${encode(name)}${original && original !== name ? `?from=${encode(original)}` : ''}`, config, 'text/plain; charset=utf-8')); return;
   }
   if (type === 'forward') {
     state.dialog = null;
@@ -958,7 +953,7 @@ async function executeConfirmed(action, payload) {
   if (action === 'delete-history') { await run('历史记录已删除', () => core.api('DELETE', `/api/history/${encode(payload)}`)); state.selected = { type: 'history-index', id: '' }; }
   if (action === 'close-shell') {
     await run('Shell 已关闭', () => core.api('DELETE', `/api/shells/${encode(payload)}`));
-    for (const workspace of state.workspaces) workspace.panes = workspace.panes.filter(pane => pane.shellID !== payload);
+    for (const workspace of state.workspaces) removeShellFromWorkspace(workspace, payload);
     saveWorkspaces(); render();
   }
   if (action === 'delete-file') { await run('文件已删除', () => core.api('DELETE', `/api/sessions/${encode(state.inspector.sessionID)}/files?path=${encode(payload)}`), { refresh: false }); await loadInspector(); }
