@@ -50,7 +50,7 @@ export class TerminalController {
         const instance = this.instances.get(message.id);
         if (instance && !instance.ended) {
           instance.ended = true;
-          instance.term.write(`\r\n\x1b[33m[${t('Shell 已结束')}]\x1b[0m\r\n`);
+          instance.term.write(`\r\n\x1b[33m[${t('Shell ended')}]\x1b[0m\r\n`);
         }
       }
       if (message.type === 'sessions') this.hooks.sessions?.(message);
@@ -163,9 +163,9 @@ export class TerminalController {
       const result = await this.core.api('GET', `/api/shells/${encodeURIComponent(shellID)}/output-range?tail=1&max=524288`);
       if (result.data?.d) term.write(base64ToBytes(result.data.d));
     } catch (error) {
-      term.write(`\r\n\x1b[31m[${t('读取输出失败')}: ${String(error)}]\x1b[0m\r\n`);
+      term.write(`\r\n\x1b[31m[${t('Failed to read output')}: ${String(error)}]\x1b[0m\r\n`);
     }
-    if (readOnly) term.write(`\r\n\x1b[33m[${t('只读历史')}]\x1b[0m\r\n`);
+    if (readOnly) term.write(`\r\n\x1b[33m[${t('Read-only history')}]\x1b[0m\r\n`);
     else {
       this.wanted.add(shellID);
       this.send({ type: 'watch_add', id: shellID });

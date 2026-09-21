@@ -1,9 +1,8 @@
-import english from './en.js';
 import chinese from './zh-CN.js';
 
 const STORAGE_KEY = 'termcp-desktop-language';
-const resources = { 'zh-CN': chinese, en: english };
-const supported = Object.keys(resources);
+const resources = { 'zh-CN': chinese };
+const supported = ['en', ...Object.keys(resources)];
 const stored = localStorage.getItem(STORAGE_KEY);
 let language = supported.includes(stored)
   ? stored
@@ -11,13 +10,13 @@ let language = supported.includes(stored)
 let replacements = [];
 
 function updateReplacements() {
-  replacements = Object.entries(resources[language] || resources['zh-CN']).sort((a, b) => b[0].length - a[0].length);
+  replacements = Object.entries(resources[language] || {}).sort((a, b) => b[0].length - a[0].length);
 }
 
 export function getLanguage() { return language; }
 
 export function setLanguage(next) {
-  language = supported.includes(next) ? next : 'zh-CN';
+  language = supported.includes(next) ? next : 'en';
   localStorage.setItem(STORAGE_KEY, language);
   document.documentElement.lang = language;
   updateReplacements();
@@ -26,7 +25,7 @@ export function setLanguage(next) {
 
 export function t(value) {
   const source = String(value ?? '');
-  if (language === 'zh-CN') return source;
+  if (language === 'en') return source;
   let translated = source;
   for (const [from, to] of replacements) translated = translated.split(from).join(to);
   return translated;
@@ -39,7 +38,7 @@ function shouldSkip(node) {
 
 export function localizeDOM(root = document) {
   document.documentElement.lang = language;
-  if (language === 'zh-CN' || !root) return;
+  if (language === 'en' || !root) return;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
