@@ -148,7 +148,7 @@ export default {
   "Follows session lifecycle": "跟随会话生命周期",
   "Font size": "字号",
   "Font style": "字体样式",
-  "For example: Production web server": "例如：生产环境 Web 服务器",
+  "For example: Development web server": "例如：开发环境 Web 服务器",
   "Forward closed": "转发已关闭",
   "Forwards": "转发",
   "Found": "已找到",
