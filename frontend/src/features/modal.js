@@ -28,7 +28,7 @@ export function modal() {
     footer = `<button type="button" class="button" data-close>Cancel</button><button class="button primary" type="submit">Create</button>`;
   } else if (dialog.type === 'history') {
     title = 'Edit history entry'; eyebrow = 'SESSION ARCHIVE';
-    body = `<input type="hidden" name="id" value="${esc(dialog.item.id)}"><label>Name<input name="name" value="${esc(dialog.item.name)}" required></label><label>Tags<input name="tags" value="${esc((dialog.item.tags || []).join(', '))}" placeholder="release, production"></label><label>Notes<textarea name="notes" rows="5">${esc(dialog.item.notes || '')}</textarea></label>`;
+    body = `<input type="hidden" name="id" value="${esc(dialog.item.id)}"><label>Name<input name="name" value="${esc(dialog.item.name)}" required></label><label>Tags<input name="tags" value="${esc((dialog.item.tags || []).join(', '))}" placeholder="release, validation"></label><label>Notes<textarea name="notes" rows="5">${esc(dialog.item.notes || '')}</textarea></label>`;
     footer = `<button type="button" class="button" data-close>Cancel</button><button class="button primary" type="submit">Save</button>`;
   } else if (dialog.type === 'rename') {
     title = dialog.title || 'Rename'; eyebrow = 'RENAME';

@@ -20,8 +20,8 @@ export function connectionEditor(profile, loading = false) {
     </nav>
     <section class="connection-editor-panel" data-connection-panel="basic" role="tabpanel">
       <div class="connection-form-grid">
-        <label>Configuration name<input name="name" value="${esc(profile.name)}" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" maxlength="64" placeholder="production-server" required ${disabled} ${profile.name ? '' : 'autofocus'}><small>Used in sessions and resource lists. Use letters, numbers, underscores and hyphens only.</small></label>
-        <label>Notes<input name="description" value="${esc(profile.description)}" placeholder="For example: Production web server" ${disabled}></label>
+        <label>Configuration name<input name="name" value="${esc(profile.name)}" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" maxlength="64" placeholder="development-server" required ${disabled} ${profile.name ? '' : 'autofocus'}><small>Used in sessions and resource lists. Use letters, numbers, underscores and hyphens only.</small></label>
+        <label>Notes<input name="description" value="${esc(profile.description)}" placeholder="For example: Development web server" ${disabled}></label>
         <label class="span-2">Host<input name="host" value="${esc(profile.host)}" placeholder="192.168.1.10 or ssh.example.com" autocomplete="off" required ${disabled}></label>
         <label>Port<input name="port" type="number" min="1" max="65535" value="${esc(profile.port || 22)}" required ${disabled}></label>
         <label>Username<input name="user" value="${esc(profile.user)}" placeholder="root" autocomplete="username" required ${disabled}></label>
@@ -125,4 +125,3 @@ export function setTrustUnknownHost(form, scope, trusted) {
   const enabled = scope === 'main' || Boolean(form.querySelector('[data-jump-enabled]')?.checked);
   if (textarea) textarea.required = enabled && !trusted;
 }
-
