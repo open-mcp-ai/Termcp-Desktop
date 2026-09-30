@@ -77,6 +77,8 @@ func run(logRuntime *logging.Runtime) error {
 		return nil
 	}
 	app := NewApp()
+	setDockReopenHandler(func() { app.showWindow("") })
+	defer setDockReopenHandler(nil)
 	err := wails.Run(&options.App{
 		Title:              config.ProductName,
 		Width:              1360,
@@ -98,7 +100,7 @@ func run(logRuntime *logging.Runtime) error {
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "ai.openmcp.termcp.desktop",
 			OnSecondInstanceLaunch: func(options.SecondInstanceData) {
-				app.showWindow("")
+				triggerDockReopen()
 			},
 		},
 		Mac: &mac.Options{

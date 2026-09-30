@@ -39,9 +39,18 @@ export function fmtSize(bytes) {
 }
 
 export function parentPath(value) {
-  const clean = String(value || '/').replace(/\/+$/, '') || '/';
+  const normalized = String(value || '/').replace(/\\/g, '/');
+  const drive = normalized.match(/^([A-Za-z]:)(?:\/|$)/)?.[1];
+  const clean = normalized.replace(/\/+$/, '') || (drive ? `${drive}/` : '/');
+  if (drive) {
+    if (clean === drive || clean === `${drive}/`) return `${drive}/`;
+    const separator = clean.lastIndexOf('/');
+    return separator <= drive.length ? `${drive}/` : clean.slice(0, separator);
+  }
+  const share = clean.match(/^(\/\/[^/]+\/[^/]+)/)?.[1];
+  if (share && clean === share) return share;
   if (clean === '/') return '/';
   const parts = clean.split('/'); parts.pop(); return parts.join('/') || '/';
 }
 
-export const joinPath = (base, name) => `${String(base || '/').replace(/\/+$/, '')}/${name}`.replace(/^\/+/, '/');
+export const joinPath = (base, name) => `${String(base || '/').replace(/\\/g, '/').replace(/\/+$/, '')}/${name}`;

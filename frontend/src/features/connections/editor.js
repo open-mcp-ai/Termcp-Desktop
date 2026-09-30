@@ -63,6 +63,7 @@ export function connectionEditor(profile, loading = false) {
         <label>Default shell<input name="default_shell" value="${esc(profile.defaultShell)}" placeholder="Auto-detect, for example /bin/zsh" ${disabled}></label>
         <label>Default terminal mode<select name="default_mode" ${disabled}><option value="pty" ${profile.defaultMode === 'pty' ? 'selected' : ''}>PTY interactive terminal</option><option value="pipe" ${profile.defaultMode === 'pipe' ? 'selected' : ''}>Pipe non-interactive</option></select></label>
         <label>Connection timeout<input name="dial_timeout_seconds" type="number" min="1" max="600" value="${esc(profile.dialTimeout || 30)}" ${disabled}><small>Seconds</small></label>
+        <label>AI approval for new sessions<select name="approval_policy" ${disabled}><option value="inherit" ${profile.approvalPolicy === 'inherit' ? 'selected' : ''}>Use global default</option><option value="on" ${profile.approvalPolicy === 'on' ? 'selected' : ''}>Always on</option><option value="off" ${profile.approvalPolicy === 'off' ? 'selected' : ''}>Always off</option></select><small>Applies to AI Shell input, file changes and port forwards.</small></label>
       </div>
       <div class="connection-option-card">
         <label class="check-row"><input type="checkbox" name="trust_unknown_host" value="true" data-trust-toggle="main" ${profile.trustUnknownHost ? 'checked' : ''} ${disabled}><span><b>Trust unknown host keys automatically</b><small>When disabled, known_hosts content is required for strict host verification.</small></span></label>

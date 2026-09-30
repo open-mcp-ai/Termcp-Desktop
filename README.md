@@ -73,16 +73,21 @@ This is not an Electron wrapper. The desktop shell uses [Wails v2](https://wails
 ## Features
 
 - **Real terminal workspace** — xterm exchanges real PTY bytes through `/api/ui/ws`, synchronizes resize events, and restores scrollback with output-range loading.
+- **Input activity** — Shell tabs show when a person or an AI agent is typing, using Core v0.2.4 activity events.
 - **Multiple sessions and panes** — workspace tabs, up to four panes, horizontal/vertical/tiled layouts, adjustable ratios, pane maximization, and persisted layouts.
 - **Complete SSH connection lifecycle** — create, edit, test, and delete connection profiles, then open sessions and shells directly from them.
 - **Files and port forwarding** — browse local/SFTP files, upload, download, rename, and create directories; configure Local, Remote, and Dynamic forwards.
-- **Replayable history** — search closed sessions, edit tags and notes, read captured output, and export Markdown or PNG screenshots.
+- **Indexed conversation history** — inspect input and output events from closed sessions, switch between retained shells, and export raw terminal logs.
+- **Resource tags** — label connections, sessions, and shells locally, then filter the resource explorer by tag.
+- **AI action approvals** — keep approval off by default, set a global default or per-connection override, and review pending AI Shell input, file changes, and port-forward starts. Active sessions can be toggled individually; the app shows a review badge and can request optional system notifications.
 - **Core and system-service management** — install, uninstall, start, stop, restart, and configure autostart. Closing the desktop window does not stop a registered Core service.
 - **Native desktop experience** — single-instance behavior, system tray controls, window wake-up, and native packages for macOS, Windows, and Linux.
 - **English and Simplified Chinese UI** — switch the application and tray menus immediately from Settings.
 - **Observable and private by default** — desktop, Core-service, Wails-binding, and REST operations use structured JSON Lines logs without passwords, private keys, tokens, or request bodies.
 
 See the [API coverage matrix](docs/api-coverage.md) for the desktop implementation of the Core WebUI contract.
+
+Approval defaults are saved by the desktop app and synchronized to each Core connection profile as `default_approval`. New sessions inherit that profile value; changing a default does not change running sessions. Actions initiated directly in the desktop UI are human actions and do not enter the AI approval queue. System notifications use Wails' native notification API and require OS support and permission; pending requests remain visible in the app.
 
 <a id="quick-start"></a>
 
@@ -137,7 +142,7 @@ npm run dev:wails
 # Frontend-only preview with sanitized demo data
 npm run dev
 
-# Frontend tests, production build, and Go tests
+# Frontend tests, release build, and Go tests
 npm test
 
 # Syntax checks, all tests, and go vet
@@ -148,6 +153,8 @@ npm run build
 ```
 
 On macOS, the build output is `build/bin/Termcp.app`. Windows produces `Termcp.exe`, and Linux produces a native executable. Release packages should be built on their target operating systems so they use the corresponding WebView and packaging toolchain.
+
+The desktop version follows the pinned termcp Core release in `go.mod`. To prepare a release, update that dependency first, then run `npm run release:version -- X.Y.Z`. `npm run check` and `npm run build` verify that all GUI version fields match Core; this integration targets v0.2.4.
 
 ### Project structure
 
@@ -180,7 +187,7 @@ prototype/         Archived interaction prototypes
 
 ## CI and Releases
 
-GitHub Actions runs frontend tests, production builds, Go unit tests, coverage collection, `go vet`, and native Wails builds on Windows, Linux, and macOS. Pushing a strict `vX.Y.Z` tag creates a release after all checks pass and publishes `SHA256SUMS` alongside the platform packages.
+GitHub Actions runs frontend tests, release builds, Go unit tests, coverage collection, `go vet`, and native Wails builds on Windows, Linux, and macOS. Pushing a strict `vX.Y.Z` tag creates a release after all checks pass and publishes `SHA256SUMS` alongside the platform packages.
 
 ## Security Boundary
 

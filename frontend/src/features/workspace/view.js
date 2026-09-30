@@ -1,6 +1,13 @@
 import { dot, esc, icon } from '../../ui/render.js';
+import { t } from '../../i18n/index.js';
 
-export function renderWorkspacePage({ state, activeWorkspace, workspaceSession, shellByID, inspectorShell }) {
+export function shellActivityLabel(status) {
+  if (status === 'human') return t('Human typing…');
+  if (status === 'ai') return t('AI typing…');
+  return '';
+}
+
+export function renderWorkspacePage({ state, activeWorkspace, workspaceSession, shellByID, inspectorShell, activityForShell = () => '' }) {
   const workspace = activeWorkspace();
   workspace.layout ||= 'grid';
   workspace.shellTabs ||= workspace.panes || [];
@@ -13,7 +20,7 @@ export function renderWorkspacePage({ state, activeWorkspace, workspaceSession, 
   const terminal = panes.length
     ? `<div class="terminal-workspace layout-${esc(workspace.layout)} ${workspace.maximized ? 'maximized' : ''} ${dropClass}" data-pane-count="${panes.length}" data-session-drop-zone>${panes.map(pane => renderTerminalPane(pane, workspace, shellByID)).join('')}<div class="session-drop-hint"><span>${state.dropRegion === 'top' ? 'Split above' : state.dropRegion === 'bottom' ? 'Split below' : state.dropRegion === 'left' ? 'Split on the left' : 'Split on the right'}</span></div></div>`
     : `<div class="workspace-empty ${dropClass}" data-session-drop-zone><span>›_</span><h2>No open sessions</h2><p>Open Connections and double-click a connection to create and open a new session.</p><button class="button primary" data-section="resources">Open connections</button><div class="session-drop-hint"><span>Drop to open session</span></div></div>`;
-  const shellTabs = renderShellTabs(workspace, workspaceSession(workspace), shellByID);
+  const shellTabs = renderShellTabs(workspace, workspaceSession(workspace), shellByID, activityForShell);
   return `<div class="workspace-page ${state.inspector.collapsed ? 'inspector-collapsed' : ''}"><div class="workspace-tabs"><div class="workspace-tab-scroll">${tabs}</div><button class="new-workspace-tab" data-action="new-session" title="New SSH session" aria-label="New SSH session">${icon('plus', 16)}</button></div>${terminal}${shellTabs}<aside class="workspace-inspector ${state.inspector.collapsed ? 'collapsed' : ''}">${inspectorShell()}</aside></div>`;
 }
 
@@ -24,12 +31,13 @@ function renderTerminalPane(pane, workspace, shellByID) {
   return `<section class="terminal-pane ${active ? 'active' : ''}" data-pane-shell="${esc(pane.shellID)}" data-pane-activate="${esc(pane.shellID)}"><div class="terminal-host" data-terminal-shell="${esc(pane.shellID)}" data-shell-context="${esc(pane.shellID)}"></div></section>`;
 }
 
-function renderShellTabs(workspace, session, shellByID) {
+function renderShellTabs(workspace, session, shellByID, activityForShell) {
   const tabs = (workspace.shellTabs || []).map(tab => {
     const item = shellByID(tab.shellID);
     if (!item) return '';
     const active = workspace.activeShell === tab.shellID;
-    return `<div class="shell-tab ${active ? 'active' : ''}" data-shell-context="${esc(tab.shellID)}" data-shell-drag="${esc(tab.shellID)}" data-session-drag="${esc(tab.sessionID)}" draggable="true"><button data-shell-tab="${esc(tab.shellID)}" data-session="${esc(tab.sessionID)}" title="${esc(item.session.name)} / ${esc(item.name || 'shell')}">${dot(item.status)}<span>${esc(item.name || 'shell')}</span><small>${esc(item.session.name)}</small></button><button class="shell-tab-close" data-close-shell-tab="${esc(tab.shellID)}" title="Close shell" aria-label="Close shell">×</button></div>`;
+    const activity = item.status === 'running' ? activityForShell(tab.shellID) : '';
+    return `<div class="shell-tab ${active ? 'active' : ''}" data-shell-context="${esc(tab.shellID)}" data-shell-drag="${esc(tab.shellID)}" data-session-drag="${esc(tab.sessionID)}" draggable="true"><button data-shell-tab="${esc(tab.shellID)}" data-session="${esc(tab.sessionID)}" title="${esc(item.session.name)} / ${esc(item.name || 'shell')}">${dot(item.status)}<span>${esc(item.name || 'shell')}</span><small>${esc(item.session.name)}</small><em class="shell-input-activity" data-shell-activity="${esc(tab.shellID)}" data-kind="${esc(activity)}">${esc(shellActivityLabel(activity))}</em></button><button class="shell-tab-close" data-close-shell-tab="${esc(tab.shellID)}" title="Close shell" aria-label="Close shell">×</button></div>`;
   }).join('');
   return `<div class="shell-tabbar" aria-label="Shell tabs"><div class="shell-tab-scroll">${tabs || '<span class="shell-tabs-empty">No shells</span>'}</div>${session ? `<button class="new-shell-tab" data-action="new-shell" data-id="${esc(session.id)}" title="New shell">${icon('plus', 15)}</button>` : ''}<small class="shell-tab-hint">Drag a shell tab into the terminal to split</small></div>`;
 }

@@ -1,5 +1,6 @@
 import { core } from './core.js';
 import { getAppearance } from './appearance.js';
+import { approvalSettings } from './features/approval/policy.js';
 import { loadWorkspaceState, reconcileWorkspaceState, saveCollapsedGroups as persistCollapsedGroups, saveWorkspaceState } from './features/workspace/model.js';
 
 const persistedWorkspace = loadWorkspaceState();
@@ -10,10 +11,13 @@ export const state = {
   error: '',
   section: 'resources',
   filter: '',
+  tagFilter: '',
   selected: { type: 'connection', id: '' },
   expanded: new Set(['connection:internal']),
   dialog: null,
   appearance: getAppearance(),
+  approvalSettings,
+  approvals: [],
   contextMenu: null,
   terminalMenu: null,
   draggedWorkspace: '',
@@ -24,9 +28,15 @@ export const state = {
   closedSessionTabs: persistedWorkspace.closedSessionTabs,
   collapsedGroups: persistedWorkspace.collapsedGroups,
   activeWorkspace: persistedWorkspace.activeWorkspace,
-  inspector: { tab: 'files', path: '/', data: null, loading: false, error: '', loadedKey: '', sessionID: '', collapsed: localStorage.getItem('termcp-desktop-inspector-collapsed') === '1' },
+  inspector: { tab: 'files', path: '', shellID: '', paths: {}, shellDirectories: {}, data: null, loading: false, error: '', loadedKey: '', sessionID: '', collapsed: localStorage.getItem('termcp-desktop-inspector-collapsed') === '1' },
   historyQuery: '',
-  historyTranscript: '',
+  historyShellID: '',
+  historySpans: [],
+  historySpanIndex: -1,
+  historyText: '',
+  historyNextOffset: 0,
+  historyLoading: false,
+  historyError: '',
   wsStatus: core.preview ? 'preview' : 'connecting',
   service: { supported: true, platform: '', installed: false, running: false, autostart: false, pid: 0, label: '', definition: '', log_path: '', executable: '', description: '' },
   systemFonts: { items: ['system-ui'], loading: false, loaded: false, error: '' },

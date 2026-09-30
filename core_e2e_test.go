@@ -7,8 +7,13 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
 	"github.com/open-mcp-ai/termcp/gui/internal/model"
 )
@@ -30,7 +35,6 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	app := newApp(service)
 
 	assertAPIStatus(t, app, "GET", "/api/connections", nil, http.StatusOK)
-	assertAPIStatus(t, app, "GET", "/api/connection-templates", nil, http.StatusOK)
 	profile := "kind = \"internal\"\ndescription = \"integration profile\"\n"
 	assertAPIStatus(t, app, "POST", "/api/connections/test", profile, http.StatusOK, "text/plain")
 	assertAPIStatus(t, app, "PUT", "/api/connections/integration", profile, http.StatusNoContent, "text/plain")
@@ -54,6 +58,64 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	}
 	assertAPIStatus(t, app, "GET", "/api/sessions/"+url.PathEscape(session.SessionID)+"/shells", nil, http.StatusOK)
 	assertAPIStatus(t, app, "GET", "/api/shells/"+url.PathEscape(session.ShellID)+"/output-range?tail=1&max=1024", nil, http.StatusOK)
+	activitySocket, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:"+strconv.Itoa(port)+"/api/ui/ws", nil)
+	if err != nil {
+		t.Fatalf("connect to Core UI WebSocket: %v", err)
+	}
+	defer activitySocket.Close()
+	if err := activitySocket.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var firstEvent struct {
+		Type string `json:"type"`
+	}
+	if err := activitySocket.ReadJSON(&firstEvent); err != nil || firstEvent.Type != "sessions" {
+		t.Fatalf("Core WebSocket initial event = %+v, %v", firstEvent, err)
+	}
+	inputPath := "/api/shells/" + url.PathEscape(session.ShellID) + "/input"
+	marksPath := "/api/shells/" + url.PathEscape(session.ShellID) + "/marks"
+	assertAPIStatus(t, app, "POST", inputPath, map[string]any{"text": "echo ", "press_enter": false}, http.StatusOK)
+	assertAPIStatus(t, app, "POST", inputPath, map[string]any{"text": "indexed-", "press_enter": false}, http.StatusOK)
+	var partialMarks struct {
+		Marks []model.HistorySpan `json:"marks"`
+	}
+	decodeResponse(t, assertAPIStatus(t, app, "GET", marksPath, nil, http.StatusOK), &partialMarks)
+	for _, mark := range partialMarks.Marks {
+		if mark.Status == "i" {
+			t.Fatal("partial command created an input mark before submission")
+		}
+	}
+	assertAPIStatus(t, app, "POST", inputPath, map[string]any{"text": "history", "press_enter": true}, http.StatusOK)
+	for index, submit := range []bool{false, false, true} {
+		var event struct {
+			Type    string `json:"type"`
+			ShellID string `json:"shell_id"`
+			Source  string `json:"src"`
+			Submit  bool   `json:"submit"`
+		}
+		for {
+			if err := activitySocket.ReadJSON(&event); err != nil {
+				t.Fatalf("read shell activity event %d: %v", index, err)
+			}
+			if event.Type == "shell_activity" {
+				break
+			}
+		}
+		if event.ShellID != session.ShellID || event.Source != "api" || event.Submit != submit {
+			t.Fatalf("shell activity event %d = %+v, want shell=%q src=api submit=%t", index, event, session.ShellID, submit)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		output := assertAPIStatus(t, app, "GET", "/api/shells/"+url.PathEscape(session.ShellID)+"/output-range?tail=1&max=4096", nil, http.StatusOK)
+		if strings.Contains(output.Body, "indexed-history") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("streamed command did not reach terminal output")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	assertAPIStatus(t, app, "PATCH", "/api/sessions/"+url.PathEscape(session.SessionID), map[string]any{"name": "GUI renamed"}, http.StatusOK)
 
 	remoteDir := filepath.Join(dataDir, "e2e-files")
@@ -90,18 +152,41 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 		t.Fatal("missing forward id")
 	}
 	assertAPIStatus(t, app, "GET", "/api/sessions/"+url.PathEscape(session.SessionID)+"/forwards", nil, http.StatusOK)
+	withForward, err := app.GetSnapshot()
+	if err != nil || len(withForward.Forwards) != 1 || withForward.Forwards[0].ForwardID != forwardInfo.ID {
+		t.Fatalf("forward missing from v0.2.4 snapshot: %+v, %v", withForward.Forwards, err)
+	}
 	assertAPIStatus(t, app, "DELETE", "/api/forwards/"+url.PathEscape(forwardInfo.ID), nil, http.StatusOK)
 	assertAPIStatus(t, app, "GET", "/api/notifications?session_id="+url.QueryEscape(session.SessionID), nil, http.StatusOK)
 
 	assertAPIStatus(t, app, "POST", "/api/sessions/"+url.PathEscape(session.SessionID)+"/terminate", nil, http.StatusNoContent)
-	assertAPIStatus(t, app, "GET", "/api/history", nil, http.StatusOK)
-	assertAPIStatus(t, app, "PATCH", "/api/history/"+url.PathEscape(session.SessionID), map[string]any{"notes": "verified", "tags": []string{"e2e"}}, http.StatusOK)
-	assertAPIStatus(t, app, "GET", "/api/history/"+url.PathEscape(session.SessionID)+"/transcript?format=text", nil, http.StatusOK)
-	screenshot := assertAPIStatus(t, app, "GET", "/api/history/"+url.PathEscape(session.SessionID)+"/screenshot?lines=10&cols=80&theme=dark", nil, http.StatusOK)
-	if screenshot.Base64 == "" {
-		t.Fatal("history screenshot was not returned as binary data")
+	snapshot, err := app.GetSnapshot()
+	if err != nil || len(snapshot.History) != 1 || snapshot.History[0].ID != session.SessionID {
+		t.Fatalf("terminated session missing from history: %+v, %v", snapshot.History, err)
 	}
-	assertAPIStatus(t, app, "DELETE", "/api/history/"+url.PathEscape(session.SessionID), nil, http.StatusNoContent)
+	spans, err := app.GetConversationIndex(session.SessionID, session.ShellID)
+	if err != nil || len(spans) == 0 {
+		t.Fatalf("conversation index missing: %+v, %v", spans, err)
+	}
+	var coreMarks struct {
+		Marks     []model.HistorySpan `json:"marks"`
+		SessionID string              `json:"session_id"`
+	}
+	decodeResponse(t, assertAPIStatus(t, app, "GET", marksPath, nil, http.StatusOK), &coreMarks)
+	if coreMarks.SessionID != session.SessionID || !reflect.DeepEqual(spans, coreMarks.Marks) {
+		t.Fatalf("GUI index differs from Core marks: session=%q, gui=%+v, core=%+v", coreMarks.SessionID, spans, coreMarks.Marks)
+	}
+	inputMarks := 0
+	for _, mark := range spans {
+		if mark.Status == "i" {
+			inputMarks++
+		}
+	}
+	if inputMarks != 1 {
+		t.Fatalf("streamed command generated %d input marks, want one submitted-line mark", inputMarks)
+	}
+	assertAPIStatus(t, app, "GET", "/api/shells/"+url.PathEscape(session.ShellID)+"/output-range?start=0&max=4096", nil, http.StatusOK)
+	assertAPIStatus(t, app, "DELETE", "/api/sessions/"+url.PathEscape(session.SessionID), nil, http.StatusNoContent)
 	assertAPIStatus(t, app, "DELETE", "/api/connections/integration", nil, http.StatusNoContent)
 }
 

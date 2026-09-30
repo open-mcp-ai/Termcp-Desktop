@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -21,19 +22,22 @@ import (
 	"github.com/open-mcp-ai/termcp/gui/internal/logging"
 	"github.com/open-mcp-ai/termcp/gui/internal/model"
 	"github.com/open-mcp-ai/termcp/gui/internal/tray"
+	"github.com/open-mcp-ai/termcp/internal/storage"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
-	ctx        context.Context
-	core       *corepkg.Service
-	bridge     *bridge.Client
-	service    config.Manager
-	tray       *tray.Controller
-	dataDir    string
-	lifecycle  sync.Mutex
-	language   sync.RWMutex
-	uiLanguage string
+	ctx         context.Context
+	core        *corepkg.Service
+	bridge      *bridge.Client
+	service     config.Manager
+	tray        *tray.Controller
+	dataDir     string
+	lifecycle   sync.Mutex
+	language    sync.RWMutex
+	uiLanguage  string
+	notifyMu    sync.Mutex
+	notifyReady bool
 }
 
 var interfaceSequence atomic.Uint64
@@ -101,6 +105,12 @@ func (a *App) startup(ctx context.Context) {
 	var startupErr error
 	defer func() { done(startupErr) }()
 	a.ctx = ctx
+	if err := a.ensureNotifications(); err != nil {
+		slog.Warn("system notifications unavailable", "error", logging.ErrorText(err))
+	}
+	if !installDockReopenHandler() {
+		slog.Warn("macOS Dock reopen handler was not installed")
+	}
 	status, statusErr := a.service.Status()
 	if statusErr != nil {
 		startupErr = statusErr
@@ -133,6 +143,12 @@ func (a *App) shutdown(context.Context) {
 	done := beginInterface("shutdown")
 	var shutdownErr error
 	defer func() { done(shutdownErr) }()
+	a.notifyMu.Lock()
+	if a.notifyReady {
+		runtime.CleanupNotifications(a.ctx)
+		a.notifyReady = false
+	}
+	a.notifyMu.Unlock()
 	if a.tray != nil {
 		a.tray.Stop()
 	}
@@ -140,6 +156,49 @@ func (a *App) shutdown(context.Context) {
 		shutdownErr = err
 		slog.Error("termcp Core stop failed", "error", logging.ErrorText(err))
 	}
+}
+
+func (a *App) ensureNotifications() error {
+	a.notifyMu.Lock()
+	defer a.notifyMu.Unlock()
+	if a.notifyReady {
+		return nil
+	}
+	if a.ctx == nil {
+		return errors.New("desktop notification context is unavailable")
+	}
+	if err := runtime.InitializeNotifications(a.ctx); err != nil {
+		return err
+	}
+	a.notifyReady = true
+	return nil
+}
+
+func (a *App) RequestApprovalNotificationPermission() (bool, error) {
+	if err := a.ensureNotifications(); err != nil {
+		return false, err
+	}
+	if !runtime.IsNotificationAvailable(a.ctx) {
+		return false, nil
+	}
+	return runtime.RequestNotificationAuthorization(a.ctx)
+}
+
+func (a *App) SendApprovalNotification(id, title, body string) error {
+	if err := a.ensureNotifications(); err != nil {
+		return err
+	}
+	if !runtime.IsNotificationAvailable(a.ctx) {
+		return errors.New("system notifications are unavailable")
+	}
+	allowed, err := runtime.CheckNotificationAuthorization(a.ctx)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return errors.New("system notification permission was not granted")
+	}
+	return runtime.SendNotification(a.ctx, runtime.NotificationOptions{ID: id, Title: title, Body: body})
 }
 
 func (a *App) WindowMinimise() {
@@ -211,7 +270,7 @@ func (a *App) GetServiceStatus() (result model.ServiceStatus, err error) {
 func (a *App) GetSnapshot() (out model.Snapshot, err error) {
 	done := beginInterface("GetSnapshot")
 	defer func() { done(err) }()
-	out = model.Snapshot{Core: a.CoreStatus(), Connections: []model.Connection{}, Sessions: []model.Session{}, History: []model.HistoryEntry{}, Forwards: []model.Forward{}, FetchedAt: time.Now().Format(time.RFC3339)}
+	out = model.Snapshot{Core: a.CoreStatus(), Connections: []model.Connection{}, Sessions: []model.Session{}, History: []model.Session{}, Forwards: []model.Forward{}, FetchedAt: time.Now().Format(time.RFC3339)}
 	if !out.Core.Running {
 		if out.Core.Error == "" {
 			out.Core.Error = "Core 尚未就绪"
@@ -231,23 +290,21 @@ func (a *App) GetSnapshot() (out model.Snapshot, err error) {
 	if requestErr := a.bridge.GetJSON("/api/sessions", &sessions); requestErr != nil {
 		return out, requestErr
 	}
-	out.Sessions = sessions.Sessions
-	for i := range out.Sessions {
+	for _, session := range sessions.Sessions {
 		var shellList struct {
 			Shells []model.Shell `json:"shells"`
 		}
-		if err := a.bridge.GetJSON("/api/sessions/"+url.PathEscape(out.Sessions[i].ID)+"/shells", &shellList); err == nil {
-			out.Sessions[i].Shells = shellList.Shells
+		if err := a.bridge.GetJSON("/api/sessions/"+url.PathEscape(session.ID)+"/shells", &shellList); err == nil {
+			session.Shells = shellList.Shells
 		}
-		if out.Sessions[i].Shells == nil {
-			out.Sessions[i].Shells = []model.Shell{}
+		if session.Shells == nil {
+			session.Shells = []model.Shell{}
 		}
-	}
-	var history struct {
-		Sessions []model.HistoryEntry `json:"sessions"`
-	}
-	if a.bridge.GetJSON("/api/history", &history) == nil {
-		out.History = history.Sessions
+		if session.Status == "running" {
+			out.Sessions = append(out.Sessions, session)
+		} else {
+			out.History = append(out.History, session)
+		}
 	}
 	var forwards struct {
 		Forwards []model.Forward `json:"forwards"`
@@ -256,6 +313,64 @@ func (a *App) GetSnapshot() (out model.Snapshot, err error) {
 		out.Forwards = forwards.Forwards
 	}
 	return out, nil
+}
+
+// GetConversationIndex reads the archived shell's index through Core v0.2.4's
+// marks API, so the GUI uses the same spans as Core's other clients.
+func (a *App) GetConversationIndex(sessionID, shellID string) ([]model.HistorySpan, error) {
+	snapshot, err := a.GetSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	valid := false
+	for _, session := range snapshot.History {
+		if session.ID != sessionID {
+			continue
+		}
+		for _, shell := range session.Shells {
+			if shell.ID == shellID {
+				valid = true
+				break
+			}
+		}
+	}
+	if !valid {
+		return nil, errors.New("archived shell not found")
+	}
+	var response struct {
+		Marks []model.HistorySpan `json:"marks"`
+	}
+	if err := a.bridge.GetJSON("/api/shells/"+url.PathEscape(shellID)+"/marks", &response); err != nil {
+		return nil, err
+	}
+	return response.Marks, nil
+}
+
+func (a *App) SaveConversationLog(sessionID, shellID string) (string, error) {
+	if _, err := a.GetConversationIndex(sessionID, shellID); err != nil {
+		return "", err
+	}
+	destination, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Export terminal log",
+		DefaultFilename: shellID + ".log",
+	})
+	if err != nil || destination == "" {
+		return "", err
+	}
+	source, err := os.Open(storage.New(a.dataDir).LogPath(sessionID, shellID))
+	if err != nil {
+		return "", err
+	}
+	defer source.Close()
+	file, err := os.Create(destination)
+	if err != nil {
+		return "", err
+	}
+	if _, err = io.Copy(file, source); err != nil {
+		_ = file.Close()
+		return "", err
+	}
+	return destination, file.Close()
 }
 
 func (a *App) CreateSession(req model.CreateSessionRequest) (err error) {
@@ -435,8 +550,9 @@ func (a *App) LogFrontend(level, message, details string) {
 func (a *App) showWindow(section string) {
 	done := beginInterface("showWindow", "section", section)
 	defer done(nil)
-	runtime.WindowShow(a.ctx)
+	runtime.Show(a.ctx)
 	runtime.WindowUnminimise(a.ctx)
+	runtime.WindowShow(a.ctx)
 	if section != "" {
 		runtime.EventsEmit(a.ctx, "termcp:navigate", section)
 	}

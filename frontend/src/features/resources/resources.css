@@ -1,0 +1,85 @@
+.resource-tags {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 16px 0 20px;
+  padding: 12px 15px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.resource-tags > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.resource-tags b { margin-right: 4px; font-size: var(--font-small); }
+.resource-tags small { color: var(--subtle); }
+.resource-tags .button { flex: none; }
+.tag-filter {
+  display: block;
+  width: calc(100% - 24px);
+  height: 34px;
+  margin: 0 12px 10px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+}
+.history-content { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 14px; }
+.history-page { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.history-page > .content-head, .history-page > .history-detail, .history-page > .resource-tags { flex: none; }
+.history-page > .content-head { padding:12px 0 14px; }
+.history-page > .history-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 22px; max-width: none; padding: 12px 15px; }
+.history-page > .history-detail dl { display: flex; flex-wrap: wrap; gap: 10px 22px; margin: 0; }
+.history-page > .history-detail dl > div { justify-content: flex-start; gap: 6px; padding: 0; border: 0; }
+.history-page > .resource-tags { margin: 10px 0 14px; padding: 8px 12px; }
+.history-workspace { display: grid; flex: 1; grid-template-columns: minmax(260px, 34%) minmax(0, 1fr); gap: 16px; min-height: 0; }
+.history-events-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.history-events-panel > .section-title { flex: none; margin: 0 0 10px; }
+.history-shells { display: flex; flex: none; gap: 7px; margin: 0 0 12px; overflow-x: auto; }
+.history-shells > .button { flex: none; }
+.history-events-panel > .resource-tags { flex: none; margin: 0 0 12px; }
+.history-output-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; }
+.history-output-panel > .section-title { flex: none; margin: 0; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+.history-output-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.history-output-scroll > .transcript { min-height: 100%; max-height: none; overflow: visible; border-radius: 0; }
+.history-output-scroll > .empty-state, .history-output-scroll > .inspector-error { margin: 16px; }
+.content:has(.history-timeline) .content-head { flex-wrap: wrap; gap: 12px 20px; }
+.content:has(.history-timeline) .head-actions { flex-wrap: wrap; justify-content: flex-end; }
+.history-timeline {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.history-event {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(145px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 45px;
+  padding: 8px 13px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+}
+.history-event:last-child { border-bottom: 0; }
+.history-event:hover, .history-event.active { background: var(--accent-soft); }
+.history-event b { font-size: var(--font-small); }
+.history-event small, .history-event code { color: var(--muted); font-size: var(--font-tiny); }
+.history-event code { text-align: right; }
+.history-index-note { margin: 0 0 12px; color: var(--muted); font-size: var(--font-small); line-height: 1.5; }
+@media (max-width: 900px) {
+  .history-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 42%) minmax(0, 1fr); }
+  .history-events-panel { overflow: auto; }
+  .history-timeline { flex: none; overflow: visible; }
+}
+@media (max-width: 760px) {
+  .history-event { grid-template-columns: 1fr auto; }
+  .history-event small { grid-column: 1; }
+  .history-event code { grid-column: 2; grid-row: 1 / 3; }
+}

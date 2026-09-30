@@ -108,11 +108,11 @@ func TestGetSnapshotAggregatesCoreResources(t *testing.T) {
 		case "/api/connections":
 			_, _ = w.Write([]byte(`{"connections":[{"name":"internal","kind":"internal"}]}`))
 		case "/api/sessions":
-			_, _ = w.Write([]byte(`{"sessions":[{"id":"session-test","name":"workspace","status":"running","mode":"pty","ssh_endpoint":"internal"}]}`))
+			_, _ = w.Write([]byte(`{"sessions":[{"id":"session-test","name":"workspace","status":"running","ssh_endpoint":"internal","created_at":1789990000000},{"id":"history-test","name":"previous","status":"exited","updated_at":1789990001000}]}`))
 		case "/api/sessions/session-test/shells":
 			_, _ = w.Write([]byte(`{"shells":[{"id":"shell-test","name":"zsh","status":"running","mode":"pty"}]}`))
-		case "/api/history":
-			_, _ = w.Write([]byte(`{"sessions":[{"id":"history-test","name":"previous","status":"archived"}]}`))
+		case "/api/sessions/history-test/shells":
+			_, _ = w.Write([]byte(`{"shells":[{"id":"old-shell","name":"shell","status":"exited","mode":"pipe"}]}`))
 		case "/api/forwards":
 			_, _ = w.Write([]byte(`{"forwards":[]}`))
 		default:
@@ -134,7 +134,7 @@ func TestGetSnapshotAggregatesCoreResources(t *testing.T) {
 	if snapshot.Core.Managed {
 		t.Fatal("mock server should be reported as an externally managed Core")
 	}
-	if len(snapshot.Connections) != 1 || len(snapshot.Sessions) != 1 || len(snapshot.Sessions[0].Shells) != 1 || len(snapshot.History) != 1 {
+	if len(snapshot.Connections) != 1 || len(snapshot.Sessions) != 1 || len(snapshot.Sessions[0].Shells) != 1 || len(snapshot.History) != 1 || len(snapshot.History[0].Shells) != 1 || snapshot.History[0].UpdatedAt != 1789990001000 {
 		data, _ := json.Marshal(snapshot)
 		t.Fatalf("incomplete snapshot: %s", data)
 	}

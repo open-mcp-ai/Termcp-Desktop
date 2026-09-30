@@ -50,7 +50,7 @@ function nestedJumpConfig(raw = '') {
 export function emptyConnectionProfile(name = '') {
   return {
     name, description: '', host: '', port: 22, user: '', auth: 'password', password: '', privateKey: '', keyPassphrase: '',
-    trustUnknownHost: true, knownHosts: '', dialTimeout: 30, proxy: '', defaultShell: '', defaultMode: 'pty',
+    trustUnknownHost: true, knownHosts: '', dialTimeout: 30, proxy: '', defaultShell: '', defaultMode: 'pty', approvalPolicy: 'inherit',
     jumpEnabled: false, jumpHost: '', jumpPort: 22, jumpUser: '', jumpAuth: 'password', jumpPassword: '', jumpPrivateKey: '',
     jumpKeyPassphrase: '', jumpTrustUnknownHost: true, jumpKnownHosts: '', jumpDialTimeout: 30, jumpProxy: '', nestedJumpConfig: '', nestedJumpCount: 0,
   };
@@ -64,7 +64,7 @@ export function connectionProfileFromTOML(name, raw) {
     description: root.description || '', host: root.host || '', port: root.port || 22, user: root.user || '',
     auth: root.private_key ? 'key' : 'password', password: root.password || '', privateKey: root.private_key || '', keyPassphrase: root.key_passphrase || '',
     trustUnknownHost: root.trust_unknown_host !== false, knownHosts: root.known_hosts || '', dialTimeout: root.dial_timeout_seconds || 30,
-    proxy: root.proxy || '', defaultShell: root.default_shell || '', defaultMode: root.default_mode || 'pty',
+    proxy: root.proxy || '', defaultShell: root.default_shell || '', defaultMode: root.default_mode || 'pty', approvalPolicy: root.default_approval ? 'on' : 'inherit',
     jumpEnabled: Boolean(jump.host), jumpHost: jump.host || '', jumpPort: jump.port || 22, jumpUser: jump.user || '',
     jumpAuth: jump.private_key ? 'key' : 'password', jumpPassword: jump.password || '', jumpPrivateKey: jump.private_key || '',
     jumpKeyPassphrase: jump.key_passphrase || '', jumpTrustUnknownHost: jump.trust_unknown_host !== false,
@@ -74,7 +74,7 @@ export function connectionProfileFromTOML(name, raw) {
 
 const tomlString = value => JSON.stringify(String(value ?? ''));
 
-export function connectionFormToTOML(form) {
+export function connectionFormToTOML(form, defaultApproval = false) {
   const data = new FormData(form); const lines = ['kind = "remote"'];
   const addString = (key, value, required = false) => { const text = String(value || ''); if (required || text.trim()) lines.push(`${key} = ${tomlString(text)}`); };
   addString('description', data.get('description'));
@@ -91,6 +91,7 @@ export function connectionFormToTOML(form) {
   addString('proxy', data.get('proxy'));
   addString('default_shell', data.get('default_shell'));
   addString('default_mode', data.get('default_mode'));
+  lines.push(`default_approval = ${Boolean(defaultApproval)}`);
   if (data.get('jump_enabled') === 'true') {
     lines.push('', '[jump]');
     addString('host', data.get('jump_host'), true);
@@ -109,4 +110,3 @@ export function connectionFormToTOML(form) {
   }
   return `${lines.join('\n')}\n`;
 }
-
