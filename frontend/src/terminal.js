@@ -1,19 +1,20 @@
 import { t } from './i18n/index.js';
 import { terminalAppearance } from './appearance.js';
+import { ShellActivityTracker } from './features/workspace/activity.js';
 
-const textEncoder = new TextEncoder();
-
-function bytesToBase64(bytes) {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function base64ToBytes(value) {
-  const binary = atob(value || '');
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+export function workingDirectoryFromOSC7(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.includes('\0')) return '';
+  try {
+    const location = new URL(raw);
+    if (location.protocol !== 'file:') return '';
+    let directory = decodeURIComponent(location.pathname || '');
+    if (/^\/[A-Za-z]:\//.test(directory)) directory = directory.slice(1);
+    return directory || '/';
+  } catch {
+    if (!raw.startsWith('/')) return '';
+    try { return decodeURIComponent(raw); } catch { return raw; }
+  }
 }
 
 export class TerminalController {
@@ -24,7 +25,9 @@ export class TerminalController {
     this.retry = null;
     this.backoff = 800;
     this.instances = new Map();
+    this.directories = new Map();
     this.wanted = new Set();
+    this.activity = new ShellActivityTracker((shellID, status) => this.hooks.activity?.(shellID, status));
     this.disposed = false;
   }
 
@@ -55,8 +58,12 @@ export class TerminalController {
         this.hooks.log?.('warn', 'Invalid terminal WebSocket message', String(error));
         return;
       }
-      if (message.type === 'terminal') this.instances.get(message.id)?.term.write(base64ToBytes(message.d));
+      if (message.type === 'terminal') {
+        this.instances.get(message.id)?.term.write(message.d || '');
+        this.activity.output(message.id, message.d);
+      }
       if (message.type === 'terminal_done') {
+        this.activity.end(message.id);
         const instance = this.instances.get(message.id);
         if (instance && !instance.ended) {
           instance.ended = true;
@@ -65,11 +72,14 @@ export class TerminalController {
       }
       if (message.type === 'sessions') this.hooks.sessions?.(message);
       if (message.type === 'ui_notify') this.hooks.notify?.(message);
+      if (message.type === 'approval') this.hooks.approval?.(message);
+      if (message.type === 'shell_activity') this.activity.input(message);
     };
     ws.onerror = () => { this.hooks.log?.('warn', 'Terminal WebSocket error', 'The event channel reported an error'); };
     ws.onclose = event => {
       if (this.ws !== ws || this.disposed) return;
       this.ws = null;
+      this.activity.clear();
       this.hooks.status?.('disconnected');
       this.hooks.log?.('warn', 'Terminal WebSocket disconnected', `code=${event.code}`);
       clearTimeout(this.retry);
@@ -85,15 +95,19 @@ export class TerminalController {
   clear() {
     for (const id of [...this.instances.keys()]) this.remove(id);
     this.wanted.clear();
+    this.activity.clear();
   }
 
   remove(shellID) {
     const instance = this.instances.get(shellID);
+    this.activity.end(shellID);
     if (!instance) return;
     this.send({ type: 'watch_remove', id: shellID });
     instance.resize?.disconnect();
+    instance.cwdHandler?.dispose?.();
     try { instance.term.dispose(); } catch {}
     this.instances.delete(shellID);
+    this.directories.delete(shellID);
     this.wanted.delete(shellID);
   }
 
@@ -162,6 +176,10 @@ export class TerminalController {
     return true;
   }
 
+  workingDirectory(shellID) {
+    return this.directories.get(shellID) || '';
+  }
+
   async mount(shellID, element, readOnly = false) {
     if (!element) return;
     const existing = this.instances.get(shellID);
@@ -189,12 +207,19 @@ export class TerminalController {
     }
     term.open(element);
     try { fit?.fit(); } catch {}
-    const instance = { term, fit, ended: readOnly, userReady: false, resize: null, element, fragment: null };
+    const cwdHandler = term.parser?.registerOscHandler?.(7, value => {
+      const directory = workingDirectoryFromOSC7(value);
+      if (!directory) return false;
+      this.directories.set(shellID, directory);
+      this.hooks.cwd?.(shellID, directory);
+      return true;
+    });
+    const instance = { term, fit, ended: readOnly, userReady: false, resize: null, cwdHandler, element, fragment: null };
     this.instances.set(shellID, instance);
     this.bindActivity(instance, element);
     term.onData(data => {
       if (readOnly || instance.ended || !instance.userReady) return;
-      this.send({ type: 'input', id: shellID, d: bytesToBase64(textEncoder.encode(data)), nl: false });
+      this.send({ type: 'input', id: shellID, d: data, nl: false });
     });
     let resizeTimer;
     const resize = new ResizeObserver(() => {
@@ -208,7 +233,7 @@ export class TerminalController {
     resize.observe(element);
     try {
       const result = await this.core.api('GET', `/api/shells/${encodeURIComponent(shellID)}/output-range?tail=1&max=524288`);
-      if (result.data?.d) term.write(base64ToBytes(result.data.d));
+      if (result.data?.d) term.write(result.data.d);
     } catch (error) {
       this.hooks.log?.('error', 'Failed to restore terminal output', `shell=${shellID}: ${String(error)}`);
       term.write(`\r\n\x1b[31m[${t('Failed to read output')}: ${String(error)}]\x1b[0m\r\n`);

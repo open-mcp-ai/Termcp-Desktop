@@ -1,11 +1,13 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -46,6 +48,38 @@ func TestServiceStartsIntegratedCore(t *testing.T) {
 	}
 	if len(body.Connections) == 0 || body.Connections[0].Name != "internal" {
 		t.Fatalf("integrated Core did not expose the internal connection: %+v", body.Connections)
+	}
+
+	createResponse, err := http.Post(service.BaseURL()+"/api/sessions", "application/json", bytes.NewBufferString(`{"ssh_config":"internal","name":"cwd-test","mode":"pty","rows":24,"cols":80}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated && createResponse.StatusCode != http.StatusOK {
+		t.Fatalf("create internal session returned %s", createResponse.Status)
+	}
+	var created struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(createResponse.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	cwdResponse, err := http.Get(service.BaseURL() + "/api/sessions/" + url.PathEscape(created.SessionID) + "/files/default-directory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cwdResponse.Body.Close()
+	if cwdResponse.StatusCode != http.StatusOK {
+		t.Fatalf("default directory returned %s", cwdResponse.Status)
+	}
+	var cwd struct {
+		Directory string `json:"directory"`
+	}
+	if err := json.NewDecoder(cwdResponse.Body).Decode(&cwd); err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(cwd.Directory) {
+		t.Fatalf("default directory is not absolute: %q", cwd.Directory)
 	}
 }
 

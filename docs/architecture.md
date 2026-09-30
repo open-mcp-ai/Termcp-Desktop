@@ -26,11 +26,11 @@ flowchart TB
 
 应用只管理固定在 `127.0.0.1:18765` 的本机 Core：
 
-1. 未注册系统服务时，在 Wails 进程内构造 termcp 的 SSH server、storage、message、history、session、sshconfig、forward、MCP 和 WebUI handler。
+1. 未注册系统服务时，在 Wails 进程内构造 termcp 的 SSH server、storage、message、session、sshconfig、forward、MCP 和 WebUI handler。
 2. 注册服务时，先停止进程内 Core，再写入平台服务定义，以同一可执行文件的 `--core-service` 模式启动并等待本机 API 就绪。
 3. 已注册服务时，GUI 只附着本机 API；关闭桌面窗口不停止服务进程。
 4. 卸载服务时，先停止服务、移除定义，再立即恢复进程内 Core，保证桌面端继续可用。
-5. Core 就绪后，资源管理器从 `/api/connections`、`/api/sessions`、`/api/history`、`/api/forwards` 生成快照。
+5. Core 就绪后，资源管理器从 `/api/connections`、`/api/sessions`、`/api/forwards` 生成快照；已结束的 session 进入历史视图。桌面端通过 Core v0.2.4 的 `/api/shells/{id}/marks` 读取索引，再通过 output-range 接口读取内容。输入标记只在提交整行时生成；片段输入不会各自产生标记。
 
 所有 Wails 绑定、Core 生命周期、系统服务操作、GUI 到 Core 的出站请求，以及 Core 的入站 HTTP 接口共享结构化日志字段。日志不记录请求正文、凭据和查询参数值；单文件 10 MiB 或跨日轮转，保留 14 天。
 

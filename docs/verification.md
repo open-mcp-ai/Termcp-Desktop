@@ -1,11 +1,21 @@
 # 程序验证记录
 
+## termcp Core v0.2.4 集成（2026-09-30）
+
+| 检查 | 结果 |
+| --- | --- |
+| 版本一致性 | `go.mod`、npm 包、锁文件、Wails Bundle 和 Go 产品版本均为 `0.2.4`；构建前自动校验 |
+| 历史索引 | GUI 通过 Core `/api/shells/{id}/marks` 取得与 REST 响应一致的标记；分片输入在提交前不产生输入标记，提交后只产生一个 |
+| 输入活动 | Core WebSocket 依次报告分片输入的 `submit=false` 与提交时的 `submit=true`；前端按 `api`、`ai` 来源分别显示人类与 AI 输入，回显不会提前清除提示 |
+| 全量检查 | `npm run check` 通过，前端 21 项测试和 Go 测试全部通过，`go vet` 通过 |
+| 原生构建 | `npm run build` 通过；`Termcp.app` 的 Bundle 版本为 `0.2.4`，可执行文件内嵌 Core 模块为 `v0.2.4` |
+
 ## CI/CD（2026-09-21）
 
 | 检查 | 自动化范围 |
 | --- | --- |
 | 三平台单元测试 | Windows amd64、Linux amd64、macOS arm64 分别运行前端测试、Go 测试与覆盖率采集 |
-| 静态与生产检查 | 三个平台分别运行前端语法检查、Vite build、`go vet` 和 Wails production build |
+| 静态与发布检查 | 三个平台分别运行前端语法检查、Vite build、`go vet` 和 Wails 原生构建 |
 | Windows 安装器 | CI 与 Release 均通过 Wails/NSIS 构建 `Termcp-<version>-windows-amd64-setup.exe` |
 | 发布产物 | Windows 安装器/便携包、Linux tar.gz、macOS ARM64/Intel zip |
 | 发布入口 | 推送 `vX.Y.Z` 标签或手动运行 Release 工作流；发布前复用完整跨平台 CI |

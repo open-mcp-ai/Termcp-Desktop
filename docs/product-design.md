@@ -56,13 +56,15 @@ GUI 应提供两种接入模式：
 | PTY 输入、输出、尺寸变化 | 工作台 | WebSocket /api/ui/ws；使用真实 Shell ID，协议见 ws.go | xterm、历史恢复、输入和 resize 已接入 |
 | 会话变更、人工通知推送 | 全局 / 工作台 | 同一 WebSocket 的 sessions / notify_user 消息 | 已接入 |
 | 多终端分屏 / 平铺 | 工作台布局 | 多 Shell 订阅 + 各窗格 resize | 四窗格、左右/上下/平铺、比例、最大化和持久化已完成 |
-| 连接模板、SSH 配置 CRUD / 测试 | 连接配置 | /api/connection-templates；/api/connections；POST /api/connections/test | 已接入 |
+| SSH 配置 CRUD / 测试 | 连接配置 | /api/connections；POST /api/connections/test | 已接入 |
 | 本机连接 | 连接配置 | internal 配置 | 已接入 |
 | 浏览文件、上传下载、重命名、删除、建目录 | 会话文件页 | /api/sessions/{id}/files 及 download/upload/dir 路由 | 已接入 |
 | Local / Remote / Dynamic 转发 | 会话转发页 | GET/POST /api/sessions/{id}/forwards；DELETE /api/forwards/{id} | 已接入 |
 | 通知规则查看与移除 | 通知规则 | GET /api/notifications；DELETE /api/notifications/{id} | 已接入；规则继续由 MCP 创建 |
-| 历史、正文、搜索、改名、标签、备注 | 历史记录 | /api/history；/api/history/search；PATCH；transcript | 已接入 |
-| 历史 PNG 截图 | 历史输出 | GET /api/history/{id}/screenshot | 已接入原生保存对话框 |
+| AI 操作审批 | 设置、连接详情、会话详情、审批列表 | 连接 `default_approval`；PATCH /api/sessions/{id}/approval；GET/POST /api/approvals；WebSocket approval | 已接入；默认关闭，可按全局和连接设置，运行中会话可单独切换 |
+| 已结束会话和对话索引 | 历史记录 | /api/sessions；本机 log.jsonl；/api/shells/{id}/output-range | 已接入 |
+| 资源标签 | 连接、会话、Shell、历史 | 桌面端本地存储 | 已接入编辑和筛选 |
+| 历史原始日志导出 | 历史输出 | 本机 log.bin | 已接入原生保存对话框 |
 | MCP / REST 配置速查 | API / MCP | HTTP /stream；SSE /sse；REST /api/* | 已接入复制配置 |
 | 资源 URL | 工作台 / 配置 | termcp://#会话ID；termcp://#会话ID:N | 会话与 Shell 详情已展示 |
 | API 安全边界 | Wails API bridge | 仅允许当前本机 Core 的 `/api/` 路径与指定方法 | 已接入并测试 |

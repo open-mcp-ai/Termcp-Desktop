@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,14 +10,15 @@ import (
 	"sync"
 	"time"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	guiConfig "github.com/open-mcp-ai/termcp/gui/internal/config"
 	appLogging "github.com/open-mcp-ai/termcp/gui/internal/logging"
+	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/forward"
-	"github.com/open-mcp-ai/termcp/internal/history"
 	mcpmod "github.com/open-mcp-ai/termcp/internal/mcp"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	termcpsftp "github.com/open-mcp-ai/termcp/internal/sftp"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
@@ -106,33 +108,30 @@ func (s *Service) Start() error {
 	}
 	store := storage.New(dataDir)
 	msgMgr := message.NewManager(store)
-	historyMgr := history.New(store)
-	if err := historyMgr.Load(); err != nil {
-		resultErr = err
-		sshSrv.Stop()
-		s.setReady(false, err)
-		return err
-	}
 	sessMgr := session.NewManager(msgMgr, store, sshSrv)
-	sessMgr.SetHistory(historyMgr)
 	if err := sessMgr.RestoreDead(); err != nil {
 		slog.Warn("restore dead sessions failed", "error", appLogging.ErrorText(err))
 	}
 	sshStore := sshconfig.NewStore(dataDir)
 	forwardMgr := forward.NewForwardManager()
-	sessMgr.AddTerminateListener(func(sessionID string) { forwardMgr.CloseBySession(sessionID) })
 
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	mux := http.NewServeMux()
 	httpServer := &http.Server{Addr: addr, Handler: appLogging.HTTPMiddleware(mux), ReadHeaderTimeout: 10 * time.Second}
-	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, mcpserver.WithHTTPServer(httpServer))
-	mcpSrv.SetHistory(historyMgr)
+	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, "v"+guiConfig.ProductVersion, mcpmod.WithHTTPServer(httpServer))
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
 	mux.Handle("POST /message", mcpSrv.MessageHandler())
 	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
-	web := &webui.Handler{Sessions: sessMgr, History: historyMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager()}
+	web := &webui.Handler{Sessions: sessMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager()}
+	web.ExecuteOperation = mcpSrv.ExecuteApprovedOperation
+	registerDesktopRoutes(mux, sessMgr)
 	web.Register(mux)
 	mcpSrv.SetUINotifier(web.BroadcastUINotify)
+	sessMgr.AddApprovalListener(func(_ string, req approval.Request) {
+		if req.ShellID != "" {
+			mcpSrv.NotifyManager().OnApprovalChange(req.ShellID, "approval "+string(req.State))
+		}
+	})
 
 	s.mu.Lock()
 	s.mcp, s.sessions, s.ssh, s.managed = mcpSrv, sessMgr, sshSrv, true
@@ -163,6 +162,45 @@ func (s *Service) Start() error {
 	sshSrv.Stop()
 	s.setReady(false, err)
 	return err
+}
+
+func registerDesktopRoutes(mux *http.ServeMux, sessions *session.Manager) {
+	mux.HandleFunc("GET /api/sessions/{id}/files/default-directory", func(w http.ResponseWriter, r *http.Request) {
+		sess := sessions.Get(r.PathValue("id"))
+		if sess == nil {
+			writeDirectoryError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		var (
+			directory string
+			err       error
+		)
+		if sess.SSHEndpoint == "internal" {
+			directory, err = os.UserHomeDir()
+		} else if client := sess.SSHClient(); client != nil {
+			var sftpClient *termcpsftp.Client
+			sftpClient, err = termcpsftp.NewClient(client)
+			if err == nil {
+				defer sftpClient.Close()
+				directory, err = sftpClient.Getwd()
+			}
+		} else {
+			err = errors.New("session has no active SSH connection")
+		}
+		if err != nil {
+			slog.Error("default file directory failed", "session", sess.ID, "error", appLogging.ErrorText(err))
+			writeDirectoryError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"directory": directory})
+	})
+}
+
+func writeDirectoryError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 // Attach waits for a Core that is owned by the operating system service manager.

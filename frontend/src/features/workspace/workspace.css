@@ -38,7 +38,7 @@
 .shell-tab {
   height: 31px;
   min-width: 126px;
-  max-width: 210px;
+  max-width: 280px;
   display: flex;
   align-items: center;
   border: 1px solid transparent;
@@ -55,6 +55,10 @@
 .shell-tab > button:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; padding: 0 4px 0 9px; text-align: left; }
 .shell-tab > button:first-child span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-small); font-weight: 600; }
 .shell-tab > button:first-child small { max-width: 70px; overflow: hidden; color: var(--terminal-muted); font-size: var(--font-tiny); text-overflow: ellipsis; white-space: nowrap; }
+.shell-input-activity { flex: none; padding: 3px 5px; border-radius: 4px; font-size: var(--font-tiny); font-style: normal; font-weight: 700; white-space: nowrap; }
+.shell-input-activity[data-kind=""] { display: none; }
+.shell-input-activity[data-kind="human"] { background: color-mix(in srgb, var(--terminal-accent) 16%, transparent); color: var(--terminal-accent); }
+.shell-input-activity[data-kind="ai"] { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
 .shell-tab-close { width: 27px; flex: none; border-radius: 5px; font: 15px/1 ui-monospace, monospace; opacity: 0; }
 .shell-tab:hover .shell-tab-close, .shell-tab.active .shell-tab-close { opacity: 1; }
 .shell-tab-close:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }

@@ -2,6 +2,7 @@ import { esc, joinPath } from '../ui/render.js';
 import { state } from '../state.js';
 import { emptyConnectionProfile } from './connections/profile.js';
 import { connectionEditor } from './connections/editor.js';
+import { tagsFor } from './resources/tags.js';
 
 export function modal() {
   const dialog = state.dialog;
@@ -26,9 +27,9 @@ export function modal() {
     title = 'New port forward'; eyebrow = 'SSH FORWARD';
     body = `<input type="hidden" name="session" value="${esc(dialog.session)}"><label>Direction<select name="direction"><option value="local">Local · -L</option><option value="remote">Remote · -R</option><option value="dynamic">Dynamic · -D</option></select></label><div class="form-grid"><label>Local address<input name="local_host" value="127.0.0.1"></label><label>Local port<input name="local_port" type="number" min="0" max="65535" value="0"></label><label>Remote address<input name="remote_host" value="127.0.0.1"></label><label>Remote port<input name="remote_port" type="number" min="0" max="65535" value="80"></label></div>`;
     footer = `<button type="button" class="button" data-close>Cancel</button><button class="button primary" type="submit">Create</button>`;
-  } else if (dialog.type === 'history') {
-    title = 'Edit history entry'; eyebrow = 'SESSION ARCHIVE';
-    body = `<input type="hidden" name="id" value="${esc(dialog.item.id)}"><label>Name<input name="name" value="${esc(dialog.item.name)}" required></label><label>Tags<input name="tags" value="${esc((dialog.item.tags || []).join(', '))}" placeholder="release, validation"></label><label>Notes<textarea name="notes" rows="5">${esc(dialog.item.notes || '')}</textarea></label>`;
+  } else if (dialog.type === 'tags') {
+    title = 'Edit resource tags'; eyebrow = 'RESOURCE LABELS';
+    body = `<input type="hidden" name="kind" value="${esc(dialog.kind)}"><input type="hidden" name="id" value="${esc(dialog.id)}"><p>Tags are saved in this desktop app.</p><label>Tags<input name="tags" value="${esc(tagsFor(dialog.kind, dialog.id).join(', '))}" placeholder="release, production, research" autofocus></label><p>Separate tags with commas. Remove all text to clear tags.</p>`;
     footer = `<button type="button" class="button" data-close>Cancel</button><button class="button primary" type="submit">Save</button>`;
   } else if (dialog.type === 'rename') {
     title = dialog.title || 'Rename'; eyebrow = 'RENAME';

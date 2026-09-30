@@ -1,0 +1,18 @@
+.approval-page { max-width: 920px; margin: 0 auto; padding: 24px 32px 64px; }
+.approval-intro { padding: 20px 24px; margin-bottom: 20px; }
+.approval-intro b { font-size: 18px; }
+.approval-intro p { margin: 8px 0 0; color: var(--muted, #6b7280); }
+.approval-cards { display: grid; gap: 14px; }
+.approval-card { border: 1px solid var(--line, #d8dce3); border-radius: 14px; padding: 20px 24px; background: var(--surface, #fff); }
+.approval-card header { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
+.approval-card header span { color: var(--muted, #6b7280); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.approval-card h3 { margin: 5px 0 0; font-size: 18px; }
+.approval-card p { margin: 16px 0; overflow-wrap: anywhere; }
+.approval-card pre { padding: 12px; border-radius: 8px; overflow-x: auto; background: var(--surface-muted, #f3f4f6); }
+.approval-card footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.approval-banner { display: flex; align-items: center; gap: 14px; padding: 10px 24px; background: #fef3c7; color: #713f12; }
+.approval-banner button { margin-left: auto; border: 0; background: none; color: inherit; font-weight: 700; cursor: pointer; }
+.rail button > span { position: relative; }
+.approval-badge { position: absolute; top: -7px; right: -11px; display: inline-flex; justify-content: center; align-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #d97706; color: white; font-size: 10px; font-style: normal; }
+.approval-policy-row { margin-top: 16px; }
+.approval-policy-row select { max-width: 220px; }

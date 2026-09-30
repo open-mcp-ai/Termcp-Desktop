@@ -27,12 +27,13 @@ type ServiceStatus struct {
 }
 
 type Connection struct {
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Description string `json:"description,omitempty"`
-	Host        string `json:"host,omitempty"`
-	User        string `json:"user,omitempty"`
-	Port        int    `json:"port,omitempty"`
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`
+	Description     string `json:"description,omitempty"`
+	Host            string `json:"host,omitempty"`
+	User            string `json:"user,omitempty"`
+	Port            int    `json:"port,omitempty"`
+	DefaultApproval bool   `json:"default_approval"`
 }
 
 type Shell struct {
@@ -44,24 +45,15 @@ type Shell struct {
 }
 
 type Session struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Status      string  `json:"status"`
-	Mode        string  `json:"mode"`
-	SSHEndpoint string  `json:"ssh_endpoint,omitempty"`
-	CreatedAt   string  `json:"created_at,omitempty"`
-	UpdatedAt   string  `json:"updated_at,omitempty"`
-	Shells      []Shell `json:"shells"`
-}
-
-type HistoryEntry struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Status      string   `json:"status"`
-	SSHEndpoint string   `json:"ssh_endpoint,omitempty"`
-	Reason      string   `json:"reason,omitempty"`
-	UpdatedAt   string   `json:"updated_at,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Status       string  `json:"status"`
+	ApprovalMode bool    `json:"approval_mode"`
+	ApprovalNeed int     `json:"approval_need,omitempty"`
+	SSHEndpoint  string  `json:"ssh_endpoint,omitempty"`
+	CreatedAt    int64   `json:"created_at,omitempty"`
+	UpdatedAt    int64   `json:"updated_at,omitempty"`
+	Shells       []Shell `json:"shells"`
 }
 
 type Forward struct {
@@ -72,16 +64,23 @@ type Forward struct {
 	Listen    string `json:"listen_addr"`
 	Target    string `json:"target_addr"`
 	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 type Snapshot struct {
-	Core        CoreStatus     `json:"core"`
-	Connections []Connection   `json:"connections"`
-	Sessions    []Session      `json:"sessions"`
-	History     []HistoryEntry `json:"history"`
-	Forwards    []Forward      `json:"forwards"`
-	FetchedAt   string         `json:"fetched_at"`
+	Core        CoreStatus   `json:"core"`
+	Connections []Connection `json:"connections"`
+	Sessions    []Session    `json:"sessions"`
+	History     []Session    `json:"history"`
+	Forwards    []Forward    `json:"forwards"`
+	FetchedAt   string       `json:"fetched_at"`
+}
+
+type HistorySpan struct {
+	Status string `json:"status"`
+	Time   int64  `json:"time"`
+	Start  int64  `json:"start"`
+	End    int64  `json:"end"`
 }
 
 type CreateSessionRequest struct {
