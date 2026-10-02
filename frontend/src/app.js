@@ -19,6 +19,7 @@ import { connectionPage, historyIndexPage, historyPage, sessionPage, shellPage }
 import { moveTags, setTags } from './features/resources/tags.js';
 import { commandLinePayload } from './features/resources/command.js';
 import { historyPreviewSpan } from './features/resources/history.js';
+import { SessionCreationCoordinator } from './features/resources/session-create.js';
 import { approvalPage, pendingApprovals } from './features/approval/view.js';
 import { approvalSettings, effectiveApproval, moveConnectionPolicy, policyFor, rememberPolicies, removeConnectionPolicy, setConnectionPolicy, setDesktopNotifications, setGlobalApproval, withDefaultApproval } from './features/approval/policy.js';
 import { servicePage } from './features/service/view.js';
@@ -36,9 +37,14 @@ let inspectorRequest = 0;
 let historyRequest = 0;
 let approvalSync = null;
 const inspectorDirectoryRequests = new Map();
+const sessionCreation = new SessionCreationCoordinator({
+  create: payload => core.api('POST', '/api/sessions', payload),
+  snapshot: () => core.snapshot(),
+  connected: () => state.wsStatus === 'connected',
+});
 const terminals = new TerminalController(core, {
   status(status) { state.wsStatus = status; updateConnectionBadge(); },
-  sessions() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh({ quiet: true }), 180); },
+  sessions(message) { sessionCreation.observe(message); clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh({ quiet: true }), 180); },
   notify(message) { toast(message.message || message.text || 'Core notification'); },
   approval(message) { handleApprovalEvent(message); },
   log(level, message, details) { core.log(level, message, details); },
@@ -317,17 +323,23 @@ async function createSessionFromConnection(connectionName) {
   if (!connection) return;
   const sameConnection = state.data.sessions.filter(session => session.ssh_endpoint === connectionName || (connection.kind === 'internal' && session.ssh_endpoint === 'internal'));
   const name = sameConnection.length ? `${connection.name} ${sameConnection.length + 1}` : connection.name;
+  await createSessionAndOpen(connection.name, {
+    ssh_config: connection.name,
+    name,
+    command: '',
+    mode: 'pty',
+    rows: 24,
+    cols: 100,
+  });
+}
+
+async function createSessionAndOpen(connectionName, payload) {
+  if (sessionCreation.pending(connectionName)) { toast('Connection already in progress'); return; }
   await run('Session created', async () => {
-    const result = await core.api('POST', '/api/sessions', {
-      ssh_config: connection.name,
-      name,
-      command: '',
-      mode: 'pty',
-      rows: 24,
-      cols: 100,
-    });
+    const result = await sessionCreation.create(connectionName, payload);
+    if (!result) return;
     await refresh({ quiet: true });
-    if (result.data?.shell_id && result.data?.session_id) openShell(result.data.shell_id, result.data.session_id);
+    openShell(result.shell_id, result.session_id);
   }, { refresh: false });
 }
 
@@ -843,12 +855,11 @@ document.addEventListener('submit', async event => {
     let startup;
     try { startup = commandLinePayload(data.get('command')); } catch (error) { toast(String(error), 'error'); return; }
     if (data.get('mode') === 'pipe' && !startup.command) { toast('Pipe mode needs a startup command', 'error'); return; }
+    const connectionName = String(data.get('connection') || '');
+    if (sessionCreation.pending(connectionName)) { toast('Connection already in progress'); return; }
     state.dialog = null;
-    await run('Session created', async () => {
-      const result = await core.api('POST', '/api/sessions', { ssh_config: data.get('connection'), name: data.get('name'), ...startup, mode: data.get('mode'), rows: 24, cols: 100 });
-      await refresh({ quiet: true });
-      if (result.data?.shell_id) openShell(result.data.shell_id, result.data.session_id);
-    }, { refresh: false }); return;
+    await createSessionAndOpen(connectionName, { ssh_config: connectionName, name: data.get('name'), ...startup, mode: data.get('mode'), rows: 24, cols: 100 });
+    return;
   }
   if (type === 'shell') {
     let startup;

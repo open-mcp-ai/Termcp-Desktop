@@ -62,20 +62,29 @@ func (request requestLog) finish(status int, bytes int64, err error) {
 }
 
 type Client struct {
-	core     *corepkg.Service
-	client   *http.Client
-	transfer *http.Client
+	core          *corepkg.Service
+	client        *http.Client
+	createSession *http.Client
+	transfer      *http.Client
 }
 
 func New(core *corepkg.Service) *Client {
 	return &Client{
-		core:     core,
-		client:   &http.Client{Timeout: 30 * time.Second},
-		transfer: &http.Client{},
+		core:          core,
+		client:        &http.Client{Timeout: 30 * time.Second},
+		createSession: &http.Client{Timeout: 5 * time.Minute},
+		transfer:      &http.Client{},
 	}
 }
 
 func (c *Client) BaseURL() string { return c.core.BaseURL() }
+
+func (c *Client) requestClient(method, path string) *http.Client {
+	if method == http.MethodPost && path == "/api/sessions" {
+		return c.createSession
+	}
+	return c.client
+}
 
 // GetJSON performs a GET against the Core API and decodes a JSON response.
 func (c *Client) GetJSON(path string, target any) error {
@@ -103,7 +112,7 @@ func (c *Client) DoJSON(method, path string, body any, target any) (err error) {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, requestErr := c.client.Do(req)
+	resp, requestErr := c.requestClient(method, path).Do(req)
 	if requestErr != nil {
 		return fmt.Errorf("Core 请求失败: %w", requestErr)
 	}
@@ -162,7 +171,7 @@ func (c *Client) API(input model.APIRequest) (result model.APIResponse, err erro
 		}
 		req.Header.Set("Content-Type", contentType)
 	}
-	resp, requestErr := c.client.Do(req)
+	resp, requestErr := c.requestClient(method, apiPath).Do(req)
 	if requestErr != nil {
 		return model.APIResponse{}, fmt.Errorf("Core 请求失败: %w", requestErr)
 	}
