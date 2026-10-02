@@ -44,6 +44,7 @@ type Service struct {
 	mcp      *mcpmod.Server
 	sessions *session.Manager
 	ssh      *sshserver.Server
+	store    *storage.Store
 }
 
 func New(host string, port int) *Service { return &Service{host: host, port: port, state: "stopped"} }
@@ -137,7 +138,7 @@ func (s *Service) Start() error {
 	})
 
 	s.mu.Lock()
-	s.mcp, s.sessions, s.ssh, s.managed = mcpSrv, sessMgr, sshSrv, true
+	s.mcp, s.sessions, s.ssh, s.store, s.managed = mcpSrv, sessMgr, sshSrv, store, true
 	s.mu.Unlock()
 	errCh := make(chan error, 1)
 	go func() { errCh <- mcpSrv.Start(addr) }()
@@ -152,6 +153,8 @@ func (s *Service) Start() error {
 			if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
 				resultErr = startErr
 				sshSrv.Stop()
+				_ = store.Close()
+				s.clearManagedResources()
 				s.setReady(false, startErr)
 				return startErr
 			}
@@ -163,6 +166,8 @@ func (s *Service) Start() error {
 	resultErr = err
 	_ = mcpSrv.Stop()
 	sshSrv.Stop()
+	_ = store.Close()
+	s.clearManagedResources()
 	s.setReady(false, err)
 	return err
 }
@@ -250,7 +255,7 @@ func (s *Service) Stop() error {
 		return nil
 	}
 	s.state = "stopping"
-	mcpSrv, sessMgr, sshSrv := s.mcp, s.sessions, s.ssh
+	mcpSrv, sessMgr, sshSrv, store := s.mcp, s.sessions, s.ssh, s.store
 	s.mu.Unlock()
 	if sessMgr != nil {
 		sessMgr.MarkAllDead()
@@ -262,15 +267,31 @@ func (s *Service) Stop() error {
 	if mcpSrv != nil {
 		err = mcpSrv.Stop()
 	}
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	if store != nil {
+		// Core keeps log.bin open for appends; release it before shutdown completes.
+		if closeErr := store.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close Core output logs: %w", closeErr))
+		}
+	}
+	s.clearManagedResources()
 	s.mu.Lock()
-	s.running, s.managed, s.state, s.mcp, s.sessions, s.ssh = false, false, "stopped", nil, nil, nil
+	s.running, s.state = false, "stopped"
 	s.mu.Unlock()
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err != nil {
 		slog.Error("Core lifecycle failed", "operation", "stop", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds(), "error", appLogging.ErrorText(err))
 	} else {
 		slog.Debug("Core lifecycle completed", "operation", "stop", "address", s.BaseURL(), "duration_ms", time.Since(started).Milliseconds())
 	}
 	return err
+}
+
+func (s *Service) clearManagedResources() {
+	s.mu.Lock()
+	s.mcp, s.sessions, s.ssh, s.store, s.managed = nil, nil, nil, nil, false
+	s.mu.Unlock()
 }
 
 // WaitDetached drops a stale attachment and waits until no Core answers on the
