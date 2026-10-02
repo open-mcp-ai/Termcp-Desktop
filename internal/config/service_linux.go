@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/open-mcp-ai/termcp/gui/internal/logging"
 )
 
 type linuxManager struct {
@@ -27,7 +29,7 @@ func (m *linuxManager) unitPath() string {
 }
 
 func (m *linuxManager) logPath() string {
-	return filepath.Join(m.home, ".termcp", "logs")
+	return logging.LogDirectory(filepath.Join(m.home, ".termcp"))
 }
 
 func (m *linuxManager) Status() (Status, error) {

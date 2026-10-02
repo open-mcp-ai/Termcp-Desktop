@@ -25,7 +25,7 @@ function reportFrontend(level, message, details = '') {
 
 const now = new Date().toISOString();
 const demo = {
-  core: { running: true, managed: true, address: 'http://127.0.0.1:18765', state: 'running' },
+  core: { running: true, managed: true, address: 'http://127.0.0.1:18765', version: 'v0.2.5', state: 'running' },
   connections: [
     { name: 'internal', kind: 'internal', description: 'This computer', default_approval: false },
     { name: 'dev-server', kind: 'remote', host: 'dev.example.test', user: 'developer', port: 22, description: 'Development' },
@@ -59,7 +59,7 @@ const demoService = {
   pid: 2841,
   label: 'ai.openmcp.termcp.desktop.core',
   definition: '~/Library/LaunchAgents/ai.openmcp.termcp.desktop.core.plist',
-  log_path: '~/.termcp/logs',
+  log_path: '~/.termcp/gui_log',
   data_dir: '~/.termcp',
   executable: '/Applications/Termcp-Desktop.app/Contents/MacOS/Termcp',
   description: 'macOS LaunchAgent',

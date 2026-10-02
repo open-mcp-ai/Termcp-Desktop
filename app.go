@@ -277,6 +277,12 @@ func (a *App) GetSnapshot() (out model.Snapshot, err error) {
 		}
 		return out, nil
 	}
+	var build struct {
+		Version string `json:"version"`
+	}
+	if a.bridge.GetJSON("/api/version", &build) == nil {
+		out.Core.Version = build.Version
+	}
 	var connections struct {
 		Connections []model.Connection `json:"connections"`
 	}
@@ -315,8 +321,8 @@ func (a *App) GetSnapshot() (out model.Snapshot, err error) {
 	return out, nil
 }
 
-// GetConversationIndex reads the archived shell's index through Core v0.2.4's
-// marks API, so the GUI uses the same spans as Core's other clients.
+// GetConversationIndex reads the archived shell's index through Core's marks
+// API, so the GUI uses the same spans as Core's other clients.
 func (a *App) GetConversationIndex(sessionID, shellID string) ([]model.HistorySpan, error) {
 	snapshot, err := a.GetSnapshot()
 	if err != nil {

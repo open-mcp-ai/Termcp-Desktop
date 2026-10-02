@@ -19,7 +19,13 @@ import (
 const (
 	DefaultRetention = 14 * 24 * time.Hour
 	DefaultMaxBytes  = int64(10 << 20)
+	logDirectoryName = "gui_log"
 )
+
+// LogDirectory is shared by the desktop logger and the managed Core service.
+func LogDirectory(dataDir string) string {
+	return filepath.Join(dataDir, logDirectoryName)
+}
 
 var (
 	secretValuePattern = regexp.MustCompile(`(?i)(password|passphrase|private[_-]?key|token|secret|authorization)(\s*[:=]\s*)([^\s,;]+)`)
@@ -121,7 +127,7 @@ func newRotatingWriter(config Config) (*rotatingWriter, error) {
 	if pid <= 0 {
 		pid = os.Getpid()
 	}
-	directory := filepath.Join(dataDir, "logs")
+	directory := LogDirectory(dataDir)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("create log directory: %w", err)
 	}

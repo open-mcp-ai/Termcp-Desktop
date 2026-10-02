@@ -5,7 +5,7 @@ go 1.25.9
 require (
 	github.com/gogpu/systray v0.3.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/open-mcp-ai/termcp v0.2.4
+	github.com/open-mcp-ai/termcp v0.2.5
 	github.com/wailsapp/wails/v2 v2.15.0
 	golang.org/x/sys v0.47.0
 )

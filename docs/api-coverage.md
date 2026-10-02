@@ -10,6 +10,7 @@ Termcp 通过受限 Wails API 桥访问当前 Core 的 `/api/` 路径。终端�
 | 删除连接 | `DELETE /api/connections/{name}` | 连接详情 | 集成测试 |
 | 测试连接 | `POST /api/connections/test` | 编辑器与连接详情 | 集成测试 |
 | 会话列表/创建 | `GET/POST /api/sessions` | 资源树、新建会话 | 集成测试 |
+| Core 版本 | `GET /api/version` | 设置页当前运行实例版本 | 集成测试 |
 | 会话详情/重命名/删除 | `GET/PATCH/DELETE /api/sessions/{id}` | 会话详情 | 集成测试 |
 | 结束并归档 | `POST /api/sessions/{id}/terminate` | 会话详情 | 集成测试 |
 | Shell 列表/创建 | `GET/POST /api/sessions/{id}/shells` | 会话详情、终端窗格 | 集成测试 |
@@ -47,6 +48,6 @@ Termcp 通过受限 Wails API 桥访问当前 Core 的 `/api/` 路径。终端�
 | `UninstallCoreService` | 停止并移除服务，恢复应用内 Core | macOS / Linux / Windows |
 | `StartLocalCore` / `StopLocalCore` / `RestartLocalCore` | 本机 Core 生命周期 | macOS / Linux / Windows |
 | `SetCoreAutostart` | 用户登录或系统启动时自动运行 | macOS / Linux / Windows |
-| `GetConversationIndex` | 调用 Core v0.2.4 marks 接口读取归档 Shell 索引 | 受限 REST 桥 |
+| `GetConversationIndex` | 调用 Core marks 接口读取归档 Shell 索引 | 受限 REST 桥 |
 | `SaveConversationLog` | 导出 Core 数据目录内的原始终端日志 | 本机文件系统 |
 | `RequestApprovalNotificationPermission` / `SendApprovalNotification` | 请求系统通知权限、发送待审批提醒 | Wails 原生通知接口 |

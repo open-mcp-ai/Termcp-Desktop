@@ -6,6 +6,7 @@ type CoreStatus struct {
 	Running bool   `json:"running"`
 	Managed bool   `json:"managed"`
 	Address string `json:"address"`
+	Version string `json:"version,omitempty"`
 	State   string `json:"state"`
 	Error   string `json:"error,omitempty"`
 }

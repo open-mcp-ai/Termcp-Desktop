@@ -23,7 +23,11 @@ var assets embed.FS
 var trayIconPNG []byte
 
 func main() {
-	if err := configureTermcpDataDir(""); err != nil {
+	dataDir := ""
+	if hasArgument("--core-service") {
+		dataDir, _ = argumentValue("--core-data-dir")
+	}
+	if err := configureTermcpDataDir(dataDir); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -66,11 +70,6 @@ func run(logRuntime *logging.Runtime) error {
 		return nil
 	}
 	if hasArgument("--core-service") {
-		if dataDir, ok := argumentValue("--core-data-dir"); ok {
-			if err := configureTermcpDataDir(dataDir); err != nil {
-				return err
-			}
-		}
 		if err := core.Run(); err != nil {
 			return err
 		}
