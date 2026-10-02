@@ -11,7 +11,7 @@ globalThis.window = {};
 
 const { commandLinePayload } = await import('../src/features/resources/command.js');
 const { tagsFor, setTags, knownTags } = await import('../src/features/resources/tags.js');
-const { historyPage } = await import('../src/features/resources/pages.js');
+const { connectionPage, historyPage } = await import('../src/features/resources/pages.js');
 const { historyPreviewSpan, readableTerminalText } = await import('../src/features/resources/history.js');
 const { state } = await import('../src/state.js');
 
@@ -19,6 +19,12 @@ test('startup command is sent as executable and argv for v0.2.4', () => {
   assert.deepEqual(commandLinePayload('python -m http.server "8080 test"'), { command: 'python', args: ['-m', 'http.server', '8080 test'] });
   assert.deepEqual(commandLinePayload(''), { command: '', args: [] });
   assert.throws(() => commandLinePayload('echo "unfinished'), /quote/);
+});
+
+test('connection details do not claim live host status', () => {
+  state.data.sessions = [];
+  const html = connectionPage({ name: 'host', kind: 'remote', host: 'example.test', user: 'alice', port: 22 });
+  assert.doesNotMatch(html, /class="status-dot running"/);
 });
 
 test('resource tags are deduplicated, persisted and shared with archived session', () => {

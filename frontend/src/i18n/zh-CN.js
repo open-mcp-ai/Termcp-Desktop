@@ -53,6 +53,7 @@ export default {
   "Connect to host": "连接主机",
   "Connection deleted": "连接配置已删除",
   "Connection saved": "连接配置已保存",
+  "Connection already in progress": "该连接正在创建会话",
   "Connection settings sections": "连接配置分区",
   "Connection successful": "连接成功",
   "Connection test": "连接测试",
