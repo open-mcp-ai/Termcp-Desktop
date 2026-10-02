@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 
 	"github.com/open-mcp-ai/termcp/gui/internal/config"
 	"github.com/open-mcp-ai/termcp/gui/internal/core"
@@ -78,14 +79,18 @@ func run(logRuntime *logging.Runtime) error {
 	app := NewApp()
 	setDockReopenHandler(func() { app.showWindow("") })
 	defer setDockReopenHandler(nil)
+	minWidth, minHeight := 980, 640
+	if runtime.GOOS == "darwin" {
+		minWidth, minHeight = 600, 400
+	}
 	err := wails.Run(&options.App{
 		Title:              config.ProductName,
 		Width:              1360,
 		Height:             860,
-		MinWidth:           980,
-		MinHeight:          640,
+		MinWidth:           minWidth,
+		MinHeight:          minHeight,
 		DisableResize:      false,
-		Frameless:          true,
+		Frameless:          runtime.GOOS != "darwin",
 		StartHidden:        false,
 		HideWindowOnClose:  true,
 		BackgroundColour:   &options.RGBA{R: 242, G: 244, B: 242, A: 1},
