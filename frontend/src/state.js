@@ -10,6 +10,7 @@ export const state = {
   loading: true,
   error: '',
   section: 'resources',
+  explorerOpen: false,
   filter: '',
   tagFilter: '',
   selected: { type: 'connection', id: '' },

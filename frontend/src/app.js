@@ -31,6 +31,10 @@ import { removeShellFromWorkspace, selectShellTab } from './features/workspace/m
 import { renderSessionContextMenu, renderTerminalContextMenu, renderWorkspacePage, shellActivityLabel } from './features/workspace/view.js';
 import { activePane, activeWorkspace, connectionByName, coreMode, historyByID, reconcileWorkspaces, saveCollapsedGroups, saveWorkspaces, sessionByID, shellByID, state, workspaceSession } from './state.js';
 
+if (!core.preview && /Macintosh|Mac OS X/.test(navigator.userAgent)) {
+  document.documentElement.dataset.nativeMacTitlebar = 'true';
+}
+
 let refreshTimer;
 let connectionClickTimer;
 let inspectorRequest = 0;
@@ -168,7 +172,7 @@ function render() {
   terminals.detachAll();
   const fullWidth = state.section === 'settings' || state.section === 'approvals';
   const pending = pendingApprovals().length;
-  document.querySelector('#app').innerHTML = `<a class="skip-link" href="#main-content">Skip to main content</a><div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>T_</span><b>Termcp</b></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="Minimise">—</button><button data-window="max" aria-label="Maximise window">□</button><button data-window="close" aria-label="Hide to system tray">×</button></div></header><div class="body ${fullWidth ? 'single-content' : ''}">${rail()}${fullWidth ? '' : explorer()}<main id="main-content" data-history-view="${esc(historyView)}" class="content ${historyView ? 'history-content' : ''} ${state.section === 'workspace' ? 'workspace-content' : ''} ${fullWidth ? 'settings-content' : ''}">${pending && state.section !== 'approvals' ? `<div class="approval-banner"><b>${pending} approval${pending === 1 ? '' : 's'} pending</b><span>AI actions are waiting for a decision.</span><button data-section="approvals">Review</button></div>` : ''}${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">Retry</button></div>` : ''}${content()}</main></div></div>${coreIndicator()}${sessionContextMenu()}${terminalContextMenu()}${modal()}`;
+  document.querySelector('#app').innerHTML = `<a class="skip-link" href="#main-content">Skip to main content</a><div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>T_</span><b>Termcp</b></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="Minimise">—</button><button data-window="max" aria-label="Maximise window">□</button><button data-window="close" aria-label="Hide to system tray">×</button></div></header><div class="body ${fullWidth ? 'single-content' : ''} ${state.section === 'workspace' ? `workspace-body ${state.explorerOpen ? 'explorer-open' : ''}` : ''}">${rail()}${fullWidth ? '' : explorer()}<main id="main-content" data-history-view="${esc(historyView)}" class="content ${historyView ? 'history-content' : ''} ${state.section === 'workspace' ? 'workspace-content' : ''} ${fullWidth ? 'settings-content' : ''}">${pending && state.section !== 'approvals' ? `<div class="approval-banner"><b>${pending} approval${pending === 1 ? '' : 's'} pending</b><span>AI actions are waiting for a decision.</span><button data-section="approvals">Review</button></div>` : ''}${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">Retry</button></div>` : ''}${content()}</main></div></div>${coreIndicator()}${sessionContextMenu()}${terminalContextMenu()}${modal()}`;
   localizeDOM(document.querySelector('#app'));
   if (historyScrollTop !== null) {
     document.querySelector('#main-content').scrollTop = historyScrollTop;
@@ -288,6 +292,7 @@ async function loadInspector({ force = true } = {}) {
 }
 
 function openShell(shellID, sessionID) {
+  state.explorerOpen = false;
   const session = sessionByID(sessionID);
   state.closedSessionTabs.delete(sessionID);
   let workspace = state.workspaces.find(item => item.primarySessionID === sessionID || item.mergedSessionIDs?.includes(sessionID));
@@ -391,6 +396,7 @@ function navigateToSection(section) {
   if (!allowed.has(section)) return;
   if (section === 'core') section = 'settings';
   state.section = section;
+  state.explorerOpen = false;
   state.tagFilter = '';
   if (section === 'history') state.selected = { type: 'history-index', id: '' };
   if (section === 'settings') state.selected = { type: 'settings', id: '' };
@@ -543,6 +549,7 @@ document.addEventListener('click', async event => {
   }
   const target = event.target.closest('button');
   if (!target) return;
+  if (target.dataset.toggleExplorer !== undefined) { state.explorerOpen = !state.explorerOpen; render(); return; }
   if (target.dataset.closeShellTab) { confirmDialog('Close shell', 'This shell process will end. Other shells and the SSH connection keep running.', 'close-shell', target.dataset.closeShellTab, 'Close shell'); return; }
   if (target.dataset.shellTab) {
     const workspace = activeWorkspace();
