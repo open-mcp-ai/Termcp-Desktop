@@ -122,7 +122,10 @@ func (s *Service) Start() error {
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
 	mux.Handle("POST /message", mcpSrv.MessageHandler())
 	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
-	web := &webui.Handler{Sessions: sessMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager()}
+	web := &webui.Handler{
+		Sessions: sessMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(),
+		Version: "v" + guiConfig.ProductVersion, StartedAt: started.UTC().Format(time.RFC3339Nano),
+	}
 	web.ExecuteOperation = mcpSrv.ExecuteApprovedOperation
 	registerDesktopRoutes(mux, sessMgr)
 	web.Register(mux)

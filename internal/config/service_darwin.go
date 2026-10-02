@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/open-mcp-ai/termcp/gui/internal/logging"
 )
 
 type darwinManager struct {
@@ -30,7 +32,7 @@ func (m *darwinManager) plistPath() string {
 	return filepath.Join(m.home, "Library", "LaunchAgents", Label+".plist")
 }
 func (m *darwinManager) logPath() string {
-	return filepath.Join(m.home, ".termcp", "logs")
+	return logging.LogDirectory(filepath.Join(m.home, ".termcp"))
 }
 func (m *darwinManager) stdioLogPath() string {
 	return filepath.Join(m.logPath(), "termcp-core-service-stdio.log")

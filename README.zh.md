@@ -154,7 +154,7 @@ npm run build
 
 macOS 构建结果位于 `build/bin/Termcp.app`。Windows 产出 `Termcp.exe`，Linux 产出原生可执行文件。发布构建应在各目标操作系统上分别执行，以使用对应的 WebView 与打包工具链。
 
-桌面端版本跟随 `go.mod` 中锁定的 termcp Core 发布版本。准备新版本时，先升级该依赖，再运行 `npm run release:version -- X.Y.Z`。`npm run check` 与 `npm run build` 会校验所有 GUI 版本字段均与 Core 一致；当前集成版本为 v0.2.4。
+桌面端版本跟随 `go.mod` 中锁定的 termcp Core 发布版本。准备新版本时，先升级该依赖，再运行 `npm run release:version -- X.Y.Z`。`npm run check` 与 `npm run build` 会校验所有 GUI 版本字段均与 Core 一致；当前集成版本为 v0.2.5。
 
 ### 项目结构
 
@@ -180,7 +180,7 @@ prototype/         前期交互原型归档
 ### 日志与数据
 
 - 数据目录：`~/.termcp`
-- 日志目录：`~/.termcp/logs`
+- GUI 与托管 Core 日志目录：`~/.termcp/gui_log`
 - 默认级别：`debug`
 - 轮转策略：单文件 10 MiB 或跨日轮转，保留 14 天
 - 权限：日志文件 `0600`，日志目录 `0700`

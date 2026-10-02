@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,9 +13,54 @@ import (
 	"time"
 )
 
+func TestConfigureRoutesGlobalLogsToGUILogDirectory(t *testing.T) {
+	previousSlog := slog.Default()
+	previousStandard := log.Writer()
+	t.Cleanup(func() {
+		slog.SetDefault(previousSlog)
+		log.SetOutput(previousStandard)
+	})
+	dataDir := t.TempDir()
+	runtime, err := Configure(Config{DataDir: dataDir, Component: "termcp-desktop", Level: slog.LevelDebug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := filepath.Dir(runtime.Path), LogDirectory(dataDir); got != want {
+		t.Fatalf("log directory = %q, want %q", got, want)
+	}
+	slog.Info("global slog probe")
+	log.Print("standard log probe")
+	NewWailsLogger(runtime.Logger).Info("Wails probe")
+	LogFrontend("warn", "frontend probe", "details")
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(runtime.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, probe := range []string{"global slog probe", "standard log probe", "Wails probe", "frontend probe"} {
+		if !strings.Contains(string(contents), probe) {
+			t.Fatalf("%q missing from GUI log: %s", probe, contents)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "logs")); !os.IsNotExist(err) {
+		t.Fatalf("legacy log directory was created: %v", err)
+	}
+	if goruntime.GOOS != "windows" {
+		info, err := os.Stat(LogDirectory(dataDir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o700 {
+			t.Fatalf("GUI log directory permissions = %o", info.Mode().Perm())
+		}
+	}
+}
+
 func TestRotatesBySizeAndRemovesExpiredLogs(t *testing.T) {
 	dataDir := t.TempDir()
-	logDir := filepath.Join(dataDir, "logs")
+	logDir := LogDirectory(dataDir)
 	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		t.Fatal(err)
 	}

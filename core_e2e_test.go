@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	guiConfig "github.com/open-mcp-ai/termcp/gui/internal/config"
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
 	"github.com/open-mcp-ai/termcp/gui/internal/model"
 )
@@ -33,6 +34,25 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = service.Stop() })
 	app := newApp(service)
+	var version struct {
+		Version string `json:"version"`
+	}
+	decodeResponse(t, assertAPIStatus(t, app, "GET", "/api/version", nil, http.StatusOK), &version)
+	if want := "v" + guiConfig.ProductVersion; version.Version != want {
+		t.Fatalf("embedded Core version = %q, want %q", version.Version, want)
+	}
+	var daemon struct {
+		Daemon    bool   `json:"daemon"`
+		Version   string `json:"version"`
+		StartedAt string `json:"started_at"`
+	}
+	decodeResponse(t, assertAPIStatus(t, app, "GET", "/api/daemon", nil, http.StatusOK), &daemon)
+	if daemon.Daemon || daemon.Version != version.Version || daemon.StartedAt == "" {
+		t.Fatalf("embedded Core daemon metadata = %+v", daemon)
+	}
+	if snapshot, err := app.GetSnapshot(); err != nil || snapshot.Core.Version != version.Version {
+		t.Fatalf("snapshot Core version = %q, error = %v", snapshot.Core.Version, err)
+	}
 
 	assertAPIStatus(t, app, "GET", "/api/connections", nil, http.StatusOK)
 	profile := "kind = \"internal\"\ndescription = \"integration profile\"\n"
@@ -154,7 +174,7 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	assertAPIStatus(t, app, "GET", "/api/sessions/"+url.PathEscape(session.SessionID)+"/forwards", nil, http.StatusOK)
 	withForward, err := app.GetSnapshot()
 	if err != nil || len(withForward.Forwards) != 1 || withForward.Forwards[0].ForwardID != forwardInfo.ID {
-		t.Fatalf("forward missing from v0.2.4 snapshot: %+v, %v", withForward.Forwards, err)
+		t.Fatalf("forward missing from snapshot: %+v, %v", withForward.Forwards, err)
 	}
 	assertAPIStatus(t, app, "DELETE", "/api/forwards/"+url.PathEscape(forwardInfo.ID), nil, http.StatusOK)
 	assertAPIStatus(t, app, "GET", "/api/notifications?session_id="+url.QueryEscape(session.SessionID), nil, http.StatusOK)
@@ -180,6 +200,9 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	for _, mark := range spans {
 		if mark.Status == "i" {
 			inputMarks++
+			if mark.End != mark.Start {
+				t.Fatalf("input mark owns output bytes: %+v", mark)
+			}
 		}
 	}
 	if inputMarks != 1 {
