@@ -16,6 +16,8 @@ const icons = {
   folder: '<path d="M3 6h7l2 2h9v11H3z"/>',
   forward: '<path d="M5 7h11m0 0-3-3m3 3-3 3M19 17H8m0 0 3-3m-3 3 3 3"/>',
   bell: '<path d="M6 16h12l-2-3V9a4 4 0 0 0-8 0v4z"/><path d="M10 19h4"/>',
+  book: '<path d="M3 4h6a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H3zM21 4h-6a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h6z"/>',
+  pin: '<path d="M9 3h6l-1 5 3 3v2H7v-2l3-3zM12 13v8"/>',
   download: '<path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/>',
   collapse: '<path d="m14 7-5 5 5 5"/>',
   expand: '<path d="m10 7 5 5-5 5"/>',

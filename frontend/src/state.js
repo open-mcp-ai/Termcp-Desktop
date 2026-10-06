@@ -4,13 +4,19 @@ import { approvalSettings } from './features/approval/policy.js';
 import { loadWorkspaceState, reconcileWorkspaceState, saveCollapsedGroups as persistCollapsedGroups, saveWorkspaceState } from './features/workspace/model.js';
 
 const persistedWorkspace = loadWorkspaceState();
+const persistedSidebarPinned = localStorage.getItem('termcp-desktop-sidebar-pinned') !== '0';
 
 export const state = {
   data: { core: { running: false, managed: false, address: 'http://127.0.0.1:18765', state: 'starting' }, connections: [], sessions: [], history: [], forwards: [] },
   loading: true,
   error: '',
-  section: 'resources',
-  explorerOpen: false,
+  section: 'workspace',
+  settingsView: 'overview',
+  integrationReturnSection: 'workspace',
+  sidebarOpen: persistedSidebarPinned,
+  sidebarPinned: persistedSidebarPinned,
+  approvalMenuOpen: false,
+  approvalPromptID: '',
   filter: '',
   tagFilter: '',
   selected: { type: 'connection', id: '' },
@@ -21,6 +27,7 @@ export const state = {
   approvals: [],
   contextMenu: null,
   terminalMenu: null,
+  shellModeMenu: null,
   draggedWorkspace: '',
   draggedSession: '',
   draggedShell: '',

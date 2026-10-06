@@ -16,8 +16,10 @@ export function modal() {
     body = `<label>Connections<select name="connection">${state.data.connections.map(item => `<option value="${esc(item.name)}" ${dialog.connection === item.name ? 'selected' : ''}>${esc(item.name)} · ${esc(item.kind === 'internal' ? 'Local' : item.host)}</option>`).join('')}</select></label><label>Session name<input name="name" placeholder="Defaults to the connection name"></label><label>Startup command<input name="command" placeholder="Leave blank to open the default shell"></label><label>Terminal mode<select name="mode"><option value="pty">PTY interactive terminal</option><option value="pipe">Pipe non-interactive</option></select></label>`;
     footer = `<button type="button" class="button" data-close>Cancel</button><button class="button primary" type="submit">Connect and open</button>`;
   } else if (dialog.type === 'shell') {
-    title = 'New shell'; eyebrow = 'SESSION CHANNEL';
-    body = `<input type="hidden" name="session" value="${esc(dialog.session)}"><label>Shell name<input name="name" value="shell" required></label><label>Startup command<input name="command" placeholder="Leave blank to use the default shell"></label><label>Terminal mode<select name="mode"><option value="pty">PTY</option><option value="pipe">Pipe</option></select></label>`;
+    title = dialog.mode === 'pipe' ? 'New Pipe shell' : dialog.mode === 'pty' ? 'New PTY shell' : 'New shell'; eyebrow = 'SESSION CHANNEL';
+    body = dialog.mode
+      ? `<input type="hidden" name="session" value="${esc(dialog.session)}"><input type="hidden" name="mode" value="${esc(dialog.mode)}"><label>Startup command<input name="command" placeholder="${dialog.mode === 'pipe' ? 'Enter a command to run' : 'Leave blank to use the default shell'}" ${dialog.mode === 'pipe' ? 'required' : ''} autofocus></label>`
+      : `<input type="hidden" name="session" value="${esc(dialog.session)}"><label>Shell name<input name="name" value="shell" required></label><label>Startup command<input name="command" placeholder="Leave blank to use the default shell"></label><label>Terminal mode<select name="mode"><option value="pty">PTY</option><option value="pipe">Pipe</option></select></label>`;
     footer = `<button type="button" class="button" data-close>Cancel</button><button class="button primary" type="submit">Create</button>`;
   } else if (dialog.type === 'connection') {
     title = dialog.original ? `Edit ${dialog.original}` : 'New SSH connection'; eyebrow = 'SSH PROFILE';

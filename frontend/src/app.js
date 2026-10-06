@@ -3,13 +3,14 @@ import './theme.css';
 import './features/workspace/workspace.css';
 import './features/resources/resources.css';
 import './features/approval/approval.css';
+import './features/integrations/integrations.css';
 import './ui/feedback.css';
 import { core } from './core.js';
 import { setAppearance } from './appearance.js';
 import { getLanguage, localizeDOM, setLanguage, t } from './i18n/index.js';
 import { TerminalController } from './terminal.js';
 
-import { dot, encode, esc, joinPath, parentPath } from './ui/render.js';
+import { dot, encode, esc, icon, joinPath, parentPath } from './ui/render.js';
 import { emptyPage } from './ui/components.js';
 
 import { connectionFormToTOML, connectionProfileFromTOML, emptyConnectionProfile } from './features/connections/profile.js';
@@ -20,15 +21,15 @@ import { moveTags, setTags } from './features/resources/tags.js';
 import { commandLinePayload } from './features/resources/command.js';
 import { historyPreviewSpan } from './features/resources/history.js';
 import { SessionCreationCoordinator } from './features/resources/session-create.js';
-import { approvalPage, pendingApprovals } from './features/approval/view.js';
+import { approvalMenu, approvalPage, approvalPrompt, pendingApprovals } from './features/approval/view.js';
 import { approvalSettings, effectiveApproval, moveConnectionPolicy, policyFor, rememberPolicies, removeConnectionPolicy, setConnectionPolicy, setDesktopNotifications, setGlobalApproval, withDefaultApproval } from './features/approval/policy.js';
-import { servicePage } from './features/service/view.js';
 import { settingsPage } from './features/settings/view.js';
+import { integrationPage } from './features/integrations/view.js';
 import { inspectorBody, inspectorShell } from './features/inspector/view.js';
 import { activateInspectorShell, followShellDirectory, performFileUpload, rememberInspectorPath } from './features/inspector/controller.js';
 import { modal } from './features/modal.js';
 import { removeShellFromWorkspace, selectShellTab } from './features/workspace/model.js';
-import { renderSessionContextMenu, renderTerminalContextMenu, renderWorkspacePage, shellActivityLabel } from './features/workspace/view.js';
+import { renderSessionContextMenu, renderShellModeMenu, renderTerminalContextMenu, renderWorkspacePage, shellActivityLabel } from './features/workspace/view.js';
 import { activePane, activeWorkspace, connectionByName, coreMode, historyByID, reconcileWorkspaces, saveCollapsedGroups, saveWorkspaces, sessionByID, shellByID, state, workspaceSession } from './state.js';
 
 if (!core.preview && /Macintosh|Mac OS X/.test(navigator.userAgent)) {
@@ -40,6 +41,9 @@ let connectionClickTimer;
 let inspectorRequest = 0;
 let historyRequest = 0;
 let approvalSync = null;
+let sidebarHideTimer;
+let lastRenderedWorkspaceID = '';
+const creatingShells = new Set();
 const inspectorDirectoryRequests = new Map();
 const sessionCreation = new SessionCreationCoordinator({
   create: payload => core.api('POST', '/api/sessions', payload),
@@ -110,12 +114,17 @@ async function handleApprovalEvent(message) {
   try { await loadApprovals(); } catch (error) { core.log('warn', 'Approval list refresh failed', String(error)); }
   const request = message.request || {};
   if (request.state === 'pending') {
+    state.approvalPromptID = request.id || '';
+    state.approvalMenuOpen = false;
     toast(message.message || 'AI action needs approval', 'warning');
     if (approvalSettings.desktopNotifications) {
       try { await core.sendApprovalNotification(request.id || '', t(message.title || 'Approval requested'), message.message || request.summary || ''); }
       catch (error) { core.log('warn', 'System notification failed', String(error)); }
     }
-  } else if (message.message) toast(message.message);
+  } else {
+    if (state.approvalPromptID === request.id) state.approvalPromptID = '';
+    if (message.message) toast(message.message);
+  }
   render();
 }
 
@@ -131,8 +140,8 @@ function selectedResource() {
 function content() {
   if (state.section === 'workspace') return workspacePage();
   if (state.section === 'approvals') return approvalPage();
-  if (state.section === 'service') return servicePage();
   if (state.section === 'settings') return settingsPage();
+  if (state.section === 'integrations') return integrationPage();
   if (state.section === 'history' && state.selected.type !== 'history') return historyIndexPage();
   const resource = selectedResource();
   const pages = { connection: connectionPage, session: sessionPage, shell: shellPage, history: historyPage };
@@ -159,6 +168,29 @@ function coreIndicator() {
   return `<div class="core-indicator" id="core-indicator"><button data-section="settings" aria-label="${statusText}">${dot(status)}<span>Core</span></button><div class="core-tooltip" role="tooltip"><header>${dot(status)}<div><b id="core-indicator-title">${statusText}</b><small>${coreMode()}</small></div></header><dl><div><dt>Local service address</dt><dd>${esc(state.data.core.address || '127.0.0.1:18765')}</dd></div><div><dt>Terminal event channel</dt><dd id="core-channel-status">${esc(state.wsStatus)}</dd></div><div><dt>System service</dt><dd>${state.service.installed ? (state.service.running ? 'Registered · Running' : 'Registered · Stopped') : 'Not registered'}</dd></div><div><dt>Autostart</dt><dd>${state.service.autostart ? 'Enabled' : 'Disabled'}</dd></div></dl><small>Open Core management in Settings</small></div></div>`;
 }
 
+function updateTabScrollControls() {
+  const strip = document.querySelector('.workspace-tab-scroll');
+  if (!strip) return;
+  const overflowing = strip.scrollWidth > strip.clientWidth + 1;
+  strip.classList.toggle('is-overflowing', overflowing);
+  const left = document.querySelector('[data-tab-scroll="left"]');
+  const right = document.querySelector('[data-tab-scroll="right"]');
+  for (const control of [left, right]) if (control) control.hidden = !overflowing;
+  if (left) left.disabled = !overflowing || strip.scrollLeft < 2;
+  if (right) right.disabled = !overflowing || strip.scrollLeft >= strip.scrollWidth - strip.clientWidth - 2;
+}
+
+function showActiveTab() {
+  const strip = document.querySelector('.workspace-tab-scroll');
+  const active = strip?.querySelector('.workspace-tab.active');
+  if (!active) return;
+  const stripRect = strip.getBoundingClientRect();
+  const activeRect = active.getBoundingClientRect();
+  if (activeRect.left < stripRect.left) strip.scrollLeft -= stripRect.left - activeRect.left;
+  else if (activeRect.right > stripRect.right) strip.scrollLeft += activeRect.right - stripRect.right;
+  updateTabScrollControls();
+}
+
 function render() {
   const historyView = state.section === 'history' && state.selected.type === 'history' ? state.selected.id : '';
   const previousContent = document.querySelector('#main-content');
@@ -169,11 +201,19 @@ function render() {
   const eventsScrollTop = previousEvents?.dataset.shellId === state.historyShellID ? previousEvents.scrollTop : null;
   const previousOutput = historyScrollTop !== null ? previousContent.querySelector('.history-output-scroll') : null;
   const outputScrollTop = previousOutput?.dataset.shellId === state.historyShellID && Number(previousOutput.dataset.spanIndex) === state.historySpanIndex ? previousOutput.scrollTop : null;
+  const previousTabScrollLeft = document.querySelector('.workspace-tab-scroll')?.scrollLeft || 0;
   terminals.detachAll();
-  const fullWidth = state.section === 'settings' || state.section === 'approvals';
+  const fullWidth = state.section === 'settings' || state.section === 'approvals' || state.section === 'integrations';
   const pending = pendingApprovals().length;
-  document.querySelector('#app').innerHTML = `<a class="skip-link" href="#main-content">Skip to main content</a><div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>T_</span><b>Termcp</b></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="Minimise">—</button><button data-window="max" aria-label="Maximise window">□</button><button data-window="close" aria-label="Hide to system tray">×</button></div></header><div class="body ${fullWidth ? 'single-content' : ''} ${state.section === 'workspace' ? `workspace-body ${state.explorerOpen ? 'explorer-open' : ''}` : ''}">${rail()}${fullWidth ? '' : explorer()}<main id="main-content" data-history-view="${esc(historyView)}" class="content ${historyView ? 'history-content' : ''} ${state.section === 'workspace' ? 'workspace-content' : ''} ${fullWidth ? 'settings-content' : ''}">${pending && state.section !== 'approvals' ? `<div class="approval-banner"><b>${pending} approval${pending === 1 ? '' : 's'} pending</b><span>AI actions are waiting for a decision.</span><button data-section="approvals">Review</button></div>` : ''}${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">Retry</button></div>` : ''}${content()}</main></div></div>${coreIndicator()}${sessionContextMenu()}${terminalContextMenu()}${modal()}`;
+  document.querySelector('#app').innerHTML = `<a class="skip-link" href="#main-content">Skip to main content</a><div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>T_</span><b>Termcp</b></div><div class="title-approvals" style="--wails-draggable:no-drag"><button class="title-approval-button ${state.approvalMenuOpen ? 'active' : ''}" data-toggle-approval-menu aria-label="Approval notifications${pending ? ` (${pending} pending)` : ''}" aria-expanded="${state.approvalMenuOpen}" title="Approval notifications">${icon('bell', 18)}${pending ? `<em class="approval-badge">${pending}</em>` : ''}</button>${approvalMenu()}</div><div class="title-api-wrap" data-i18n-ignore style="--wails-draggable:no-drag"><button class="title-api-button ${state.section === 'integrations' ? 'active' : ''}" data-action="open-integrations" aria-label="API / MCP / SKILLS" aria-describedby="title-api-tooltip">${icon('book', 18)}</button><span class="title-api-tooltip" id="title-api-tooltip" role="tooltip">API / MCP / SKILLS</span></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="Minimise">—</button><button data-window="max" aria-label="Maximise window">□</button><button data-window="close" aria-label="Hide to system tray">×</button></div></header><div class="body ${fullWidth ? 'single-content' : ''} ${state.section === 'workspace' ? 'workspace-body' : ''} ${state.sidebarOpen ? '' : 'sidebar-collapsed'} ${state.sidebarPinned ? '' : 'sidebar-unpinned'}">${rail()}${fullWidth ? '' : explorer()}<main id="main-content" data-history-view="${esc(historyView)}" class="content ${historyView ? 'history-content' : ''} ${state.section === 'workspace' ? 'workspace-content' : ''} ${fullWidth ? 'settings-content' : ''}">${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">Retry</button></div>` : ''}${content()}</main></div></div>${approvalPrompt()}${coreIndicator()}${sessionContextMenu()}${terminalContextMenu()}${renderShellModeMenu(state)}${modal()}`;
   localizeDOM(document.querySelector('#app'));
+  const tabStrip = document.querySelector('.workspace-tab-scroll');
+  if (tabStrip) {
+    tabStrip.scrollLeft = previousTabScrollLeft;
+    updateTabScrollControls();
+    if (lastRenderedWorkspaceID !== state.activeWorkspace) showActiveTab();
+    lastRenderedWorkspaceID = state.activeWorkspace;
+  }
   if (historyScrollTop !== null) {
     document.querySelector('#main-content').scrollTop = historyScrollTop;
     const timeline = document.querySelector('.history-timeline');
@@ -292,7 +332,6 @@ async function loadInspector({ force = true } = {}) {
 }
 
 function openShell(shellID, sessionID) {
-  state.explorerOpen = false;
   const session = sessionByID(sessionID);
   state.closedSessionTabs.delete(sessionID);
   let workspace = state.workspaces.find(item => item.primarySessionID === sessionID || item.mergedSessionIDs?.includes(sessionID));
@@ -320,7 +359,7 @@ function openSession(sessionID) {
   state.closedSessionTabs.delete(sessionID);
   const shell = session?.shells?.find(item => item.status === 'running') || session?.shells?.[0];
   if (shell) openShell(shell.id, sessionID);
-  else { state.dialog = { type: 'shell', session: sessionID }; render(); }
+  else createShell(sessionID);
 }
 
 async function createSessionFromConnection(connectionName) {
@@ -346,6 +385,25 @@ async function createSessionAndOpen(connectionName, payload) {
     await refresh({ quiet: true });
     openShell(result.shell_id, result.session_id);
   }, { refresh: false });
+}
+
+async function createShell(sessionID, payload = {}) {
+  if (!sessionByID(sessionID)) return null;
+  if (creatingShells.has(sessionID)) { toast('Shell creation already in progress', 'warning'); return null; }
+  const mode = payload.mode === 'pipe' ? 'pipe' : 'pty';
+  if (mode === 'pipe' && !payload.command) { toast('Pipe mode needs a startup command', 'error'); return null; }
+  creatingShells.add(sessionID);
+  state.shellModeMenu = null;
+  try {
+    return await run('Shell created', async () => {
+      const result = await core.api('POST', `/api/sessions/${encode(sessionID)}/shells`, { ...payload, mode, rows: 24, cols: 100 });
+      await refresh({ quiet: true });
+      if (result.data?.shell_id) openShell(result.data.shell_id, sessionID);
+      return result;
+    }, { refresh: false });
+  } finally {
+    creatingShells.delete(sessionID);
+  }
 }
 
 function addSessionSplit(sessionID, region = 'right', sourceWorkspaceID = '', preferredShellID = '') {
@@ -392,16 +450,17 @@ async function loadSystemFonts() {
 }
 
 function navigateToSection(section) {
-  const allowed = new Set(['resources', 'workspace', 'sessions', 'approvals', 'history', 'service', 'core', 'settings']);
+  const allowed = new Set(['resources', 'workspace', 'sessions', 'approvals', 'history', 'core', 'settings']);
   if (!allowed.has(section)) return;
   if (section === 'core') section = 'settings';
   state.section = section;
-  state.explorerOpen = false;
+  state.approvalMenuOpen = false;
+  state.shellModeMenu = null;
+  if (section !== 'settings' && section !== 'approvals') state.sidebarOpen = true;
   state.tagFilter = '';
   if (section === 'history') state.selected = { type: 'history-index', id: '' };
-  if (section === 'settings') state.selected = { type: 'settings', id: '' };
+  if (section === 'settings') { state.selected = { type: 'settings', id: '' }; state.settingsView = 'overview'; }
   if (section === 'approvals') state.selected = { type: 'approvals', id: '' };
-  if (section === 'service') state.selected = { type: 'service', id: 'local' };
   render();
 }
 
@@ -460,6 +519,20 @@ function confirmDialog(title, message, action, payload, confirm = 'Confirm') {
 }
 
 document.addEventListener('click', async event => {
+  if (state.approvalMenuOpen && !event.target.closest('.title-approvals')) {
+    state.approvalMenuOpen = false;
+    document.querySelector('.approval-menu')?.remove();
+    const bell = document.querySelector('.title-approval-button');
+    bell?.setAttribute('aria-expanded', 'false');
+    bell?.classList.remove('active');
+  }
+  if (state.shellModeMenu && !event.target.closest('.shell-mode-menu, [data-shell-mode-toggle]')) {
+    state.shellModeMenu = null;
+    document.querySelector('.shell-mode-menu')?.remove();
+    const toggle = document.querySelector('[data-shell-mode-toggle]');
+    toggle?.setAttribute('aria-expanded', 'false');
+    toggle?.classList.remove('active');
+  }
   const terminalAction = event.target.closest('[data-terminal-action]');
   if (terminalAction) {
     const menu = state.terminalMenu;
@@ -483,7 +556,7 @@ document.addEventListener('click', async event => {
     } catch {
       toast(action === 'copy' ? 'Copy failed' : 'Clipboard is unavailable', 'error');
     }
-    if (action === 'new-shell') { state.dialog = { type: 'shell', session: item.session.id }; render(); }
+    if (action === 'new-shell') await createShell(item.session.id);
     if (action === 'remove-pane') {
       const workspace = activeWorkspace();
       workspace.panes = workspace.panes.filter(pane => pane.shellID !== shellID);
@@ -504,10 +577,10 @@ document.addEventListener('click', async event => {
     if (action === 'open') {
       const shellID = contextAction.dataset.shell;
       if (shellID) openShell(shellID, session.id);
-      else { state.dialog = { type: 'shell', session: session.id }; render(); }
+      else await createShell(session.id);
       return;
     }
-    if (action === 'new-shell') { state.dialog = { type: 'shell', session: session.id }; render(); return; }
+    if (action === 'new-shell') { await createShell(session.id); return; }
     if (action === 'details') { state.section = 'sessions'; state.selected = { type: 'session', id: session.id }; render(); return; }
     if (action === 'rename') { state.dialog = { type: 'rename', title: 'Rename session', target: 'session', id: session.id, value: session.name }; render(); return; }
     if (action === 'copy-uri') { try { await navigator.clipboard.writeText(`termcp://#${session.id}`); toast('Copied'); } catch { toast('Copy failed'); } render(); return; }
@@ -549,7 +622,42 @@ document.addEventListener('click', async event => {
   }
   const target = event.target.closest('button');
   if (!target) return;
-  if (target.dataset.toggleExplorer !== undefined) { state.explorerOpen = !state.explorerOpen; render(); return; }
+  if (target.dataset.shellModeToggle !== undefined) {
+    const sessionID = target.dataset.shellModeToggle;
+    if (state.shellModeMenu?.sessionID === sessionID) state.shellModeMenu = null;
+    else {
+      const rect = target.getBoundingClientRect();
+      const width = 236; const height = 88;
+      state.shellModeMenu = {
+        sessionID,
+        x: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+        y: rect.bottom + height + 8 <= window.innerHeight ? rect.bottom + 5 : Math.max(8, rect.top - height - 5),
+      };
+    }
+    render(); return;
+  }
+  if (target.dataset.createShellMode) {
+    const mode = target.dataset.createShellMode;
+    const sessionID = target.dataset.session;
+    state.shellModeMenu = null;
+    state.dialog = { type: 'shell', session: sessionID, mode };
+    render(); return;
+  }
+  if (target.dataset.sidebarToggle !== undefined || target.dataset.toggleExplorer !== undefined) { state.sidebarOpen = !state.sidebarOpen; render(); return; }
+  if (target.dataset.tabScroll) {
+    const strip = document.querySelector('.workspace-tab-scroll');
+    strip?.scrollBy({ left: (target.dataset.tabScroll === 'left' ? -1 : 1) * Math.max(150, strip.clientWidth * .75), behavior: 'smooth' });
+    return;
+  }
+  if (target.dataset.sidebarPin !== undefined) {
+    state.sidebarPinned = !state.sidebarPinned;
+    localStorage.setItem('termcp-desktop-sidebar-pinned', state.sidebarPinned ? '1' : '0');
+    clearTimeout(sidebarHideTimer);
+    render();
+    return;
+  }
+  if (target.dataset.toggleApprovalMenu !== undefined) { state.approvalMenuOpen = !state.approvalMenuOpen; state.approvalPromptID = ''; render(); return; }
+  if (target.dataset.dismissApprovalPrompt !== undefined) { state.approvalPromptID = ''; render(); return; }
   if (target.dataset.closeShellTab) { confirmDialog('Close shell', 'This shell process will end. Other shells and the SSH connection keep running.', 'close-shell', target.dataset.closeShellTab, 'Close shell'); return; }
   if (target.dataset.shellTab) {
     const workspace = activeWorkspace();
@@ -623,14 +731,20 @@ document.addEventListener('click', async event => {
     target.disabled = true;
     await run(decision === 'approve' ? 'Action approved' : 'Action rejected', () => core.api('POST', `/api/approvals/${encode(target.dataset.approvalId)}/${decision}`, {}), { refresh: false });
     try { await loadApprovals(); } catch (error) { core.log('warn', 'Approval list refresh failed', String(error)); }
+    if (state.approvalPromptID === target.dataset.approvalId) state.approvalPromptID = '';
     render(); return;
   }
   if (target.dataset.confirm) { const action = target.dataset.confirm; const payload = target.dataset.payload; state.dialog = null; await executeConfirmed(action, payload); return; }
 
   const action = target.dataset.action;
   if (!action) return;
+  if (action === 'open-integrations') { if (state.section !== 'integrations') state.integrationReturnSection = state.section; state.section = 'integrations'; state.approvalMenuOpen = false; render(); return; }
+  if (action === 'close-integrations') { state.section = state.integrationReturnSection || 'workspace'; render(); return; }
+  if (action === 'open-service-details') { state.section = 'settings'; state.settingsView = 'service'; state.selected = { type: 'settings', id: '' }; render(); return; }
+  if (action === 'settings-overview') { state.settingsView = 'overview'; render(); return; }
   if (action === 'refresh') { await refresh(); return; }
   if (action === 'refresh-approvals') { await run('', loadApprovals, { refresh: false, render: true }); return; }
+  if (action === 'open-host-configs') { state.sidebarOpen = true; state.collapsedGroups.delete('connection-list'); saveCollapsedGroups(); render(); document.querySelector('[data-group-toggle="connection-list"]')?.scrollIntoView({ block: 'nearest' }); return; }
   if (action === 'install-service') { await run('System service registered and started', () => core.installService(false)); return; }
   if (action === 'install-service-autostart') { await run('System service registered with autostart enabled', () => core.installService(true)); return; }
   if (action === 'uninstall-service') { confirmDialog('Uninstall Core system service', 'The service will stop and be removed. Core will switch back to the in-app process.', 'uninstall-service', '', 'Uninstall service'); return; }
@@ -644,7 +758,7 @@ document.addEventListener('click', async event => {
   }
   if (action === 'delete-connection') { confirmDialog('Delete connection', `Delete ${target.dataset.name}? Existing sessions will not terminate immediately.`, 'delete-connection', target.dataset.name, 'Delete'); return; }
   if (action === 'connect' || action === 'new-session') { state.dialog = { type: 'session', connection: target.dataset.connection || '' }; render(); return; }
-  if (action === 'new-shell') { state.dialog = { type: 'shell', session: target.dataset.id }; render(); return; }
+  if (action === 'new-shell') { await createShell(target.dataset.id); return; }
   if (action === 'toggle-session-approval') {
     const enabled = target.dataset.enabled === '1';
     await run(enabled ? 'Approval enabled for this session' : 'Approval disabled for this session', () => core.api('PATCH', `/api/sessions/${encode(target.dataset.id)}/approval`, { enabled, timeout_seconds: 300 }));
@@ -677,6 +791,34 @@ document.addEventListener('dblclick', async event => {
   event.preventDefault();
   clearTimeout(connectionClickTimer);
   await createSessionFromConnection(connection.dataset.connectionProfile);
+});
+
+document.addEventListener('pointerenter', event => {
+  if (event.target.matches?.('.explorer')) clearTimeout(sidebarHideTimer);
+}, true);
+
+document.addEventListener('pointerleave', event => {
+  if (!event.target.matches?.('.explorer') || state.sidebarPinned || !state.sidebarOpen) return;
+  clearTimeout(sidebarHideTimer);
+  sidebarHideTimer = setTimeout(() => {
+    if (!state.sidebarPinned && state.sidebarOpen && !document.querySelector('.explorer')?.contains(document.activeElement)) {
+      state.sidebarOpen = false;
+      render();
+    }
+  }, 700);
+}, true);
+
+document.addEventListener('scroll', event => {
+  if (event.target.matches?.('.workspace-tab-scroll')) updateTabScrollControls();
+}, true);
+window.addEventListener('resize', updateTabScrollControls);
+window.addEventListener('resize', () => {
+  if (!state.shellModeMenu) return;
+  state.shellModeMenu = null;
+  document.querySelector('.shell-mode-menu')?.remove();
+  const toggle = document.querySelector('[data-shell-mode-toggle]');
+  toggle?.setAttribute('aria-expanded', 'false');
+  toggle?.classList.remove('active');
 });
 
 document.addEventListener('input', event => {
@@ -743,9 +885,10 @@ document.addEventListener('change', async event => {
 });
 
 document.addEventListener('keydown', async event => {
+  if (event.key === 'Escape' && (state.approvalMenuOpen || state.approvalPromptID)) { state.approvalMenuOpen = false; state.approvalPromptID = ''; render(); return; }
   if (event.key === 'Enter' && event.target.matches('[data-file-path]')) { event.preventDefault(); setInspectorPath(event.target.value.trim() || '/'); await loadInspector(); }
   if (event.key === 'Enter' && event.target.matches('[data-history-query]')) { event.preventDefault(); await searchHistory(); }
-  if (event.key === 'Escape' && (state.dialog || state.contextMenu || state.terminalMenu)) { state.dialog = null; state.contextMenu = null; state.terminalMenu = null; render(); }
+  if (event.key === 'Escape' && (state.dialog || state.contextMenu || state.terminalMenu || state.shellModeMenu)) { state.dialog = null; state.contextMenu = null; state.terminalMenu = null; state.shellModeMenu = null; render(); return; }
   if (state.section !== 'workspace' || event.target.matches('input,textarea,select')) return;
   if (event.altKey && event.shiftKey && (event.key === 'ArrowRight' || event.key === 'ArrowDown')) {
     event.preventDefault();
@@ -756,7 +899,7 @@ document.addEventListener('keydown', async event => {
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 't') {
     event.preventDefault();
     const session = workspaceSession(activeWorkspace());
-    if (session) { state.dialog = { type: 'shell', session: session.id }; render(); }
+    if (session) await createShell(session.id);
   }
 });
 
@@ -873,11 +1016,8 @@ document.addEventListener('submit', async event => {
     try { startup = commandLinePayload(data.get('command')); } catch (error) { toast(String(error), 'error'); return; }
     if (data.get('mode') === 'pipe' && !startup.command) { toast('Pipe mode needs a startup command', 'error'); return; }
     state.dialog = null;
-    await run('Shell created', async () => {
-      const sessionID = data.get('session');
-      const result = await core.api('POST', `/api/sessions/${encode(sessionID)}/shells`, { name: data.get('name'), ...startup, mode: data.get('mode'), rows: 24, cols: 100 });
-      await refresh({ quiet: true }); if (result.data?.shell_id) openShell(result.data.shell_id, sessionID);
-    }, { refresh: false }); return;
+    await createShell(String(data.get('session') || ''), { ...(data.get('name') ? { name: data.get('name') } : {}), ...startup, mode: data.get('mode') });
+    return;
   }
   if (type === 'connection') {
     if (!validateConnectionForm(form)) return;

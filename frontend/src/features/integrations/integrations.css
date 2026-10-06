@@ -1,0 +1,26 @@
+.integration-page { width: min(1080px, 100%); margin: 0 auto; padding-bottom: 64px; }
+.integration-page .content-head { max-width: none; }
+.integration-page .head-actions .button { display: inline-flex; align-items: center; gap: 6px; }
+.integration-lead { margin: 0 0 16px; color: var(--muted); font-size: var(--font-small); line-height: 1.5; }
+.integration-jump { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+.integration-jump a { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--accent); font-size: var(--font-small); text-decoration: none; }
+.integration-jump a:hover { background: var(--accent-soft); }
+.integration-section { margin-top: 24px; scroll-margin-top: 22px; }
+.integration-section h2 { margin: 0 0 12px; padding-bottom: 9px; border-bottom: 1px solid var(--line); font-size: calc(var(--font-base) * 1.15); }
+.integration-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.integration-card { min-width: 0; padding: 19px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.integration-card h3 { margin: 0 0 7px; font-size: var(--font-base); }
+.integration-card p { margin: 0 0 15px; color: var(--muted); font-size: var(--font-small); line-height: 1.55; }
+.integration-card p code { color: var(--text); }
+.integration-endpoint { display: flex; align-items: center; gap: 9px; min-width: 0; margin-top: 9px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); }
+.integration-endpoint span { flex: none; color: var(--muted); font-size: var(--font-tiny); }
+.integration-endpoint code { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: var(--font-small); }
+.integration-endpoint button, .integration-snippet button { flex: none; padding: 5px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--accent); cursor: pointer; }
+.integration-endpoint button:hover, .integration-snippet button:hover { background: var(--accent-soft); }
+.integration-snippet { margin-top: 14px; }
+.integration-snippet > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.integration-snippet b { font-size: var(--font-small); }
+.integration-snippet pre { margin: 0; padding: 12px; overflow: auto; border-radius: 7px; background: var(--terminal); color: var(--terminal-text); font: var(--font-small)/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.integration-note { margin: 12px 0 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--muted); font-size: var(--font-small); line-height: 1.5; }
+@media (max-width: 900px) { .integration-grid { grid-template-columns: 1fr; } }
+@media (max-width: 650px) { .integration-endpoint { flex-wrap: wrap; } .integration-endpoint span { width: 100%; } }

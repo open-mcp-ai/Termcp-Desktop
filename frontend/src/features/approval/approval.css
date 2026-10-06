@@ -16,3 +16,34 @@
 .approval-badge { position: absolute; top: -7px; right: -11px; display: inline-flex; justify-content: center; align-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #d97706; color: white; font-size: 10px; font-style: normal; }
 .approval-policy-row { margin-top: 16px; }
 .approval-policy-row select { max-width: 220px; }
+
+.approval-menu { position: absolute; top: calc(100% + 7px); right: 0; width: min(390px, calc(100vw - 20px)); max-height: min(620px, calc(100vh - 65px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.approval-menu > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.approval-menu > header b { font-size: var(--font-base); }
+.approval-menu > header span { color: var(--muted); font-size: var(--font-small); }
+.approval-menu-scroll { min-height: 0; overflow: auto; padding: 12px; }
+.approval-menu-scroll > h3 { margin: 3px 5px 10px; font-size: var(--font-small); }
+.approval-menu-item { padding: 12px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.approval-menu-item header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.approval-menu-item header b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-small); }
+.approval-menu-item header small { flex: none; color: var(--subtle); font-size: var(--font-tiny); }
+.approval-menu-item p { margin: 9px 0; color: var(--text); font-size: var(--font-small); line-height: 1.45; overflow-wrap: anywhere; }
+.approval-menu-item footer { display: flex; justify-content: flex-end; gap: 7px; }
+.approval-menu-item .button { padding: 6px 12px; }
+.approval-menu-empty { margin: 14px 5px; color: var(--muted); font-size: var(--font-small); }
+.approval-reviewed { margin: 14px 4px 3px; border-top: 1px solid var(--line); }
+.approval-reviewed summary, .approval-page-reviewed summary { padding: 13px 2px; color: var(--muted); font-size: var(--font-small); cursor: pointer; }
+.approval-reviewed summary span, .approval-page-reviewed summary span { margin-left: 6px; color: var(--subtle); }
+.approval-state { color: var(--muted); font-size: var(--font-small); text-transform: capitalize; }
+.approval-menu > footer { padding: 11px 12px; border-top: 1px solid var(--line); }
+.approval-menu > footer button { width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--accent); font-weight: 600; cursor: pointer; }
+.approval-menu > footer button:hover { background: var(--accent-soft); }
+.approval-prompt { position: fixed; z-index: 45; top: 56px; right: 16px; width: min(350px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.approval-prompt > div { display: flex; justify-content: space-between; color: var(--accent); }
+.approval-prompt > div button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 19px; }
+.approval-prompt > b { display: block; margin-top: 6px; font-size: var(--font-base); }
+.approval-prompt p { margin: 9px 0; font-size: var(--font-small); line-height: 1.45; overflow-wrap: anywhere; }
+.approval-prompt small { color: var(--muted); }
+.approval-prompt footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 15px; }
+.approval-page-reviewed { margin-top: 24px; }
+.approval-page-reviewed summary { font-size: var(--font-base); font-weight: 600; }
