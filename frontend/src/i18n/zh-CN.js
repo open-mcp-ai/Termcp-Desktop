@@ -99,6 +99,7 @@ export default {
   "Core stopped": "Core 已停止",
   "Core system service": "Core 系统服务",
   "Core version": "Core 版本",
+  "Desktop version": "桌面端版本",
   "Create": "创建",
   "Credentials are managed by termcp Core. Configuration content is read only when you edit it.": "连接凭据由 termcp Core 管理。只有主动编辑时才读取配置正文。",
   "Credentials are stored only under ~/.termcp on this computer.": "凭据仅保存在本机 ~/.termcp 目录中。",

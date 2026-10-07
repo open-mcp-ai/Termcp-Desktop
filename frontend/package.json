@@ -1,6 +1,6 @@
 {
   "name": "termcp-desktop-frontend",
-  "version": "0.2.6",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {

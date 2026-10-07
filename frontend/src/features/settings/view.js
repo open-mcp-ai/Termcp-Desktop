@@ -3,6 +3,7 @@ import { coreMode, shellCount, state } from '../../state.js';
 import { button, header } from '../../ui/components.js';
 import { getLanguage } from '../../i18n/index.js';
 import { serviceDetailsPage } from './service.js';
+import { desktopVersion, bundledCoreVersion } from '../../build-info.js';
 
 function coreSettingsCard() {
   const status = state.data.core;
@@ -16,7 +17,7 @@ function coreSettingsCard() {
     ['Port forwards', state.data.forwards.length],
     ['History entries', state.data.history.length],
   ];
-  return `<section class="settings-card core-settings-card" id="core-settings"><header><div><span>LOCAL CORE</span><h2>Core management</h2></div><div class="core-settings-actions">${button(`${icon('plus', 14)}New connection`, 'new-connection')}${runtimeAction}</div></header><div class="core-settings-runtime"><div class="core-runtime-state">${dot(status.running ? 'running' : 'error')}<span><b>${status.running ? 'Running' : 'Stopped'}</b><small>${coreMode()}</small></span></div><dl><div><dt>Local service address</dt><dd><code>${esc(status.address || 'http://127.0.0.1:18765')}</code></dd></div><div><dt>Core version</dt><dd><code>${esc(status.version || 'Unavailable')}</code></dd></div><div><dt>System service</dt><dd><button class="setting-link" data-action="open-service-details" aria-label="Open service details">${state.service.installed ? 'Registered' : 'Not registered'} ${icon('chevron', 14)}</button></dd></div></dl></div><div class="core-settings-metrics">${metrics.map(([label, value]) => `<article><strong>${value}</strong><span>${label}</span></article>`).join('')}</div></section>`;
+  return `<section class="settings-card core-settings-card" id="core-settings"><header><div><span>LOCAL CORE</span><h2>Core management</h2></div><div class="core-settings-actions">${button(`${icon('plus', 14)}New connection`, 'new-connection')}${runtimeAction}</div></header><div class="core-settings-runtime"><div class="core-runtime-state">${dot(status.running ? 'running' : 'error')}<span><b>${status.running ? 'Running' : 'Stopped'}</b><small>${coreMode()}</small></span></div><dl><div><dt>Desktop version</dt><dd><code>v${esc(desktopVersion)}</code></dd></div><div><dt>Core version</dt><dd><code>${esc(status.version || `v${bundledCoreVersion}`)}</code></dd></div><div><dt>Local service address</dt><dd><code>${esc(status.address || 'http://127.0.0.1:18765')}</code></dd></div><div><dt>System service</dt><dd><button class="setting-link" data-action="open-service-details" aria-label="Open service details">${state.service.installed ? 'Registered' : 'Not registered'} ${icon('chevron', 14)}</button></dd></div></dl></div><div class="core-settings-metrics">${metrics.map(([label, value]) => `<article><strong>${value}</strong><span>${label}</span></article>`).join('')}</div></section>`;
 }
 
 export function settingsPage() {

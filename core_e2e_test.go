@@ -38,7 +38,7 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 		Version string `json:"version"`
 	}
 	decodeResponse(t, assertAPIStatus(t, app, "GET", "/api/version", nil, http.StatusOK), &version)
-	if want := "v" + guiConfig.ProductVersion; version.Version != want {
+	if want := "v" + guiConfig.CoreVersion; version.Version != want {
 		t.Fatalf("embedded Core version = %q, want %q", version.Version, want)
 	}
 	var daemon struct {

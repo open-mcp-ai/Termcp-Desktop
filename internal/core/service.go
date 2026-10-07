@@ -119,13 +119,13 @@ func (s *Service) Start() error {
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	mux := http.NewServeMux()
 	httpServer := &http.Server{Addr: addr, Handler: appLogging.HTTPMiddleware(mux), ReadHeaderTimeout: 10 * time.Second}
-	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, "v"+guiConfig.ProductVersion, mcpmod.WithHTTPServer(httpServer))
+	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, "v"+guiConfig.CoreVersion, mcpmod.WithHTTPServer(httpServer))
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
 	mux.Handle("POST /message", mcpSrv.MessageHandler())
 	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
 	web := &webui.Handler{
 		Sessions: sessMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(),
-		Version: "v" + guiConfig.ProductVersion, StartedAt: started.UTC().Format(time.RFC3339Nano),
+		Version: "v" + guiConfig.CoreVersion, StartedAt: started.UTC().Format(time.RFC3339Nano),
 	}
 	web.ExecuteOperation = mcpSrv.ExecuteApprovedOperation
 	registerDesktopRoutes(mux, sessMgr)

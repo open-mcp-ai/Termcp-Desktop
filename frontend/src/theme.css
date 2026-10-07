@@ -406,7 +406,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .core-runtime-state b, .core-runtime-state small { display: block; }
 .core-runtime-state b { color: var(--text); font-size: calc(var(--font-base) * 1.15); }
 .core-runtime-state small { margin-top: 6px; color: var(--muted); font-size: var(--font-small); }
-.core-settings-runtime dl { display: grid; grid-template-columns: 1.4fr 1fr 1fr; margin: 0; }
+.core-settings-runtime dl { display: grid; grid-template-columns: .9fr .9fr 1.5fr .9fr; margin: 0; }
 .core-settings-runtime dl > div { min-width: 0; padding: 18px 20px; border-right: 1px solid var(--line); }
 .core-settings-runtime dl > div:last-child { border-right: 0; }
 .core-settings-runtime dt { color: var(--muted); font-size: var(--font-small); }

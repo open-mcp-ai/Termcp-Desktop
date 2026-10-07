@@ -1,4 +1,5 @@
 import { t } from './i18n/index.js';
+import { bundledCoreVersion } from './build-info.js';
 
 const bridge = {
   available: () => Boolean(window.go?.main?.App),
@@ -25,7 +26,7 @@ function reportFrontend(level, message, details = '') {
 
 const now = new Date().toISOString();
 const demo = {
-  core: { running: true, managed: true, address: 'http://127.0.0.1:18765', version: 'v0.2.5', state: 'running' },
+  core: { running: true, managed: true, address: 'http://127.0.0.1:18765', version: `v${bundledCoreVersion}`, state: 'running' },
   connections: [
     { name: 'internal', kind: 'internal', description: 'This computer', default_approval: false },
     { name: 'dev-server', kind: 'remote', host: 'dev.example.test', user: 'developer', port: 22, description: 'Development' },
