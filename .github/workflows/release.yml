@@ -3,7 +3,8 @@ name: Release
 on:
   push:
     tags:
-      - 'v*+core.*'
+      # GitHub validates this glob before any job runs; the version script checks the +core suffix.
+      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
