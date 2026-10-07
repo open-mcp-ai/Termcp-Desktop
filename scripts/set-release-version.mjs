@@ -1,9 +1,9 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-const raw = String(process.argv[2] || '').trim();
-const checkOnly = raw === '--check';
-const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(raw);
+const checkOnly = process.argv[2] === '--check';
+const raw = String(process.argv[checkOnly ? 3 : 2] || '').trim();
+const match = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\+core\.(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(raw);
 const root = process.cwd();
 const goMod = await readFile(resolve(root, 'go.mod'), 'utf8');
 const coreMatch = /^\s*github\.com\/open-mcp-ai\/termcp v(\d+\.\d+\.\d+)\s*$/m.exec(goMod);
@@ -28,14 +28,25 @@ const config = JSON.parse(files.wails);
 const productMatch = /var ProductVersion = "(\d+\.\d+\.\d+)"/.exec(files.product);
 if (!productMatch) throw new Error('internal/config/product.go must define ProductVersion.');
 
-if (!checkOnly && !match) {
-  console.error(`Invalid release version "${raw}". Expected vX.Y.Z or X.Y.Z. For a GUI-only update, increment the patch component.`);
+if ((!checkOnly || raw) && !match) {
+  console.error(`Invalid release tag "${raw}". Expected vX.Y.Z+core.A.B.C.`);
   process.exit(1);
 }
 
-const version = checkOnly ? pkg.version : `${match[1]}.${match[2]}.${match[3]}`;
-if (!/^\d+\.\d+\.\d+$/.test(version)) {
+const taggedVersion = match ? `${match[1]}.${match[2]}.${match[3]}` : '';
+const taggedCoreVersion = match ? `${match[4]}.${match[5]}.${match[6]}` : '';
+if (taggedCoreVersion && taggedCoreVersion !== coreMatch[1]) {
+  console.error(`Release tag Core v${taggedCoreVersion} does not match go.mod Core v${coreMatch[1]}.`);
+  process.exit(1);
+}
+
+const version = checkOnly ? pkg.version : taggedVersion;
+if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
   console.error(`Invalid GUI version "${version}" in package.json. Expected X.Y.Z.`);
+  process.exit(1);
+}
+if (checkOnly && match && version !== taggedVersion) {
+  console.error(`Release tag GUI v${taggedVersion} does not match package.json v${version}.`);
   process.exit(1);
 }
 
@@ -53,7 +64,13 @@ if (checkOnly) {
     console.error(`GUI version fields must match v${version}: ${mismatches.map(([name, value]) => `${name}=${value}`).join(', ')}`);
     process.exit(1);
   }
-  console.log(`GUI version fields match: v${version} (termcp Core v${coreMatch[1]}).`);
+  if (match) {
+    console.log(`version=${version}`);
+    console.log(`core_version=${coreMatch[1]}`);
+    console.log(`tag=${raw}`);
+  } else {
+    console.log(`GUI version fields match: v${version} (termcp Core v${coreMatch[1]}).`);
+  }
   process.exit(0);
 }
 
@@ -77,4 +94,5 @@ await Promise.all([
 
 // The output format can be appended directly to GitHub Actions' GITHUB_OUTPUT.
 console.log(`version=${version}`);
-console.log(`tag=v${version}`);
+console.log(`core_version=${coreMatch[1]}`);
+console.log(`tag=${raw}`);

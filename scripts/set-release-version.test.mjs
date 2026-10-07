@@ -27,15 +27,15 @@ async function fixture(t) {
   return root;
 }
 
-function run(root, version) {
-  return spawnSync(process.execPath, [script, version], { cwd: root, encoding: 'utf8' });
+function run(root, ...args) {
+  return spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: 'utf8' });
 }
 
 test('GUI patch release can advance while Core stays pinned', async t => {
   const root = await fixture(t);
-  const release = run(root, 'v0.2.6');
+  const release = run(root, 'v0.2.6+core.0.2.5');
   assert.equal(release.status, 0, release.stderr);
-  assert.match(release.stdout, /version=0\.2\.6\ntag=v0\.2\.6/);
+  assert.match(release.stdout, /version=0\.2\.6\ncore_version=0\.2\.5\ntag=v0\.2\.6\+core\.0\.2\.5/);
   assert.equal(JSON.parse(await readFile(join(root, 'package.json'))).version, '0.2.6');
   assert.equal(JSON.parse(await readFile(join(root, 'frontend/package.json'))).version, '0.2.6');
   assert.equal(JSON.parse(await readFile(join(root, 'frontend/package-lock.json'))).packages[''].version, '0.2.6');
@@ -44,13 +44,28 @@ test('GUI patch release can advance while Core stays pinned', async t => {
   const check = run(root, '--check');
   assert.equal(check.status, 0, check.stderr);
   assert.match(check.stdout, /termcp Core v0\.2\.5/);
+  const releaseCheck = run(root, '--check', 'v0.2.6+core.0.2.5');
+  assert.equal(releaseCheck.status, 0, releaseCheck.stderr);
+  assert.equal(releaseCheck.stdout, 'version=0.2.6\ncore_version=0.2.5\ntag=v0.2.6+core.0.2.5\n');
 });
 
-test('four-part release tag fails with guidance and leaves versions unchanged', async t => {
+test('release tag must use the composite three-part format', async t => {
   const root = await fixture(t);
-  const release = run(root, 'v0.2.5.1');
-  assert.equal(release.status, 1);
-  assert.match(release.stderr, /Expected vX\.Y\.Z or X\.Y\.Z/);
-  assert.match(release.stderr, /increment the patch component/);
+  for (const tag of ['v0.2.5.1', 'v0.2.6', 'v0.2.6+core.0.2.5.1']) {
+    const release = run(root, tag);
+    assert.equal(release.status, 1);
+    assert.match(release.stderr, /Expected vX\.Y\.Z\+core\.A\.B\.C/);
+  }
+  assert.equal(JSON.parse(await readFile(join(root, 'package.json'))).version, '0.2.5');
+});
+
+test('release tag must match both the Core pin and checked-in GUI version', async t => {
+  const root = await fixture(t);
+  const wrongCore = run(root, 'v0.2.6+core.0.2.6');
+  assert.equal(wrongCore.status, 1);
+  assert.match(wrongCore.stderr, /does not match go\.mod Core v0\.2\.5/);
+  const wrongGUI = run(root, '--check', 'v0.2.6+core.0.2.5');
+  assert.equal(wrongGUI.status, 1);
+  assert.match(wrongGUI.stderr, /does not match package\.json v0\.2\.5/);
   assert.equal(JSON.parse(await readFile(join(root, 'package.json'))).version, '0.2.5');
 });
