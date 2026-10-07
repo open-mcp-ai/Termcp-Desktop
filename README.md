@@ -187,7 +187,7 @@ prototype/         Archived interaction prototypes
 
 ## CI and Releases
 
-GitHub Actions runs frontend tests, release builds, Go unit tests, coverage collection, `go vet`, and native Wails builds on Windows, Linux, and macOS. Pushing a strict `vX.Y.Z` tag creates a release after all checks pass and publishes `SHA256SUMS` alongside the platform packages.
+GitHub Actions runs frontend tests, release builds, Go unit tests, coverage collection, `go vet`, and native Wails builds on Windows, Linux, and macOS. Pushing a `vX.Y.Z+core.A.B.C` tag creates a release after all checks pass and publishes `SHA256SUMS` alongside the platform packages.
 
 ## Security Boundary
 

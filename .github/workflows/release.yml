@@ -11,6 +11,15 @@ on:
         description: Release tag in vX.Y.Z+core.A.B.C format
         required: true
         type: string
+      tag_migration_phase:
+        description: One-time historical tag migration (create or delete)
+        required: false
+        type: choice
+        options:
+          - release
+          - create
+          - delete
+        default: release
 
 permissions:
   contents: read
@@ -23,7 +32,22 @@ env:
   RELEASE_REF: ${{ inputs.version || github.ref_name }}
 
 jobs:
+  migrate_tags:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_migration_phase != 'release' }}
+    name: Migrate historical tags
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Update historical tag references
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_MIGRATION_PHASE: ${{ inputs.tag_migration_phase }}
+        run: node scripts/migrate-legacy-tags.mjs
+
   metadata:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tag_migration_phase == 'release' }}
     name: Validate release version
     runs-on: ubuntu-24.04
     outputs:
