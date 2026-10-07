@@ -13,17 +13,6 @@ if (!coreMatch) {
   process.exit(1);
 }
 
-if (!checkOnly && !match) {
-  console.error(`Invalid release version "${raw}". Expected vX.Y.Z or X.Y.Z.`);
-  process.exit(1);
-}
-
-const version = checkOnly ? coreMatch[1] : `${match[1]}.${match[2]}.${match[3]}`;
-if (version !== coreMatch[1]) {
-  console.error(`GUI v${version} must match the pinned termcp Core v${coreMatch[1]}.`);
-  process.exit(1);
-}
-
 const paths = {
   package: resolve(root, 'package.json'),
   frontend: resolve(root, 'frontend/package.json'),
@@ -39,6 +28,17 @@ const config = JSON.parse(files.wails);
 const productMatch = /var ProductVersion = "(\d+\.\d+\.\d+)"/.exec(files.product);
 if (!productMatch) throw new Error('internal/config/product.go must define ProductVersion.');
 
+if (!checkOnly && !match) {
+  console.error(`Invalid release version "${raw}". Expected vX.Y.Z or X.Y.Z. For a GUI-only update, increment the patch component.`);
+  process.exit(1);
+}
+
+const version = checkOnly ? pkg.version : `${match[1]}.${match[2]}.${match[3]}`;
+if (!/^\d+\.\d+\.\d+$/.test(version)) {
+  console.error(`Invalid GUI version "${version}" in package.json. Expected X.Y.Z.`);
+  process.exit(1);
+}
+
 if (checkOnly) {
   const actual = {
     'package.json': pkg.version,
@@ -50,10 +50,10 @@ if (checkOnly) {
   };
   const mismatches = Object.entries(actual).filter(([, value]) => value !== version);
   if (mismatches.length) {
-    console.error(`GUI version must match termcp Core v${version}: ${mismatches.map(([name, value]) => `${name}=${value}`).join(', ')}`);
+    console.error(`GUI version fields must match v${version}: ${mismatches.map(([name, value]) => `${name}=${value}`).join(', ')}`);
     process.exit(1);
   }
-  console.log(`GUI and termcp Core versions match: v${version}`);
+  console.log(`GUI version fields match: v${version} (termcp Core v${coreMatch[1]}).`);
   process.exit(0);
 }
 

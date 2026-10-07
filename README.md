@@ -154,7 +154,7 @@ npm run build
 
 On macOS, the build output is `build/bin/Termcp.app`. Windows produces `Termcp.exe`, and Linux produces a native executable. Release packages should be built on their target operating systems so they use the corresponding WebView and packaging toolchain.
 
-The desktop version follows the pinned termcp Core release in `go.mod`. To prepare a release, update that dependency first, then run `npm run release:version -- X.Y.Z`. `npm run check` and `npm run build` verify that all GUI version fields match Core; this integration targets v0.2.5.
+The desktop uses a three-part version (`X.Y.Z`) that can advance independently of the termcp Core version pinned in `go.mod`. For a GUI-only update, increment the desktop patch version (for example, `v0.2.5` → `v0.2.6`) and run `npm run release:version -- X.Y.Z`. Update the Core dependency separately when needed. `npm run check` and `npm run build` verify that all GUI version fields agree and that Core is pinned to a released version.
 
 ### Project structure
 
