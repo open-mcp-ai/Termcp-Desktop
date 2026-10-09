@@ -665,8 +665,8 @@ document.addEventListener('click', async event => {
   if (action === 'history-search') { await searchHistory(); return; }
   if (action === 'test-editor-connection') {
     const form = target.closest('form'); if (!validateConnectionForm(form)) return;
-    const resultNode = form.querySelector('.modal-result'); target.disabled = true; if (resultNode) { resultNode.textContent = t('Testing connection…'); resultNode.title = ''; }
-    try { const result = await testConnection(connectionFormToTOML(form), false); if (resultNode) resultNode.textContent = t(result.data?.ok ? `Connection successful${result.data.latency_ms ? ` · ${result.data.latency_ms} ms` : ''}` : 'Test complete'); } catch (error) { if (resultNode) { const message = error?.message || String(error); resultNode.textContent = message; resultNode.title = message; } }
+    const resultNode = form.querySelector('.modal-result'); target.disabled = true; if (resultNode) resultNode.textContent = t('Testing connection…');
+    try { const result = await testConnection(connectionFormToTOML(form), false); if (resultNode) resultNode.textContent = t(result.data?.ok ? `Connection successful${result.data.latency_ms ? ` · ${result.data.latency_ms} ms` : ''}` : 'Test complete'); } catch (error) { if (resultNode) resultNode.textContent = String(error); }
     target.disabled = false; return;
   }
 });
