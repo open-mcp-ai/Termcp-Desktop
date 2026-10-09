@@ -320,7 +320,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .connection-panel-intro p { margin: 5px 0 0; }
 .jump-proxy-option { margin-top: 18px; }
 .connection-modal > footer { flex: none; min-height: 66px; align-items: center; margin: 0; padding: 12px 24px; border-top: 1px solid var(--line); background: var(--surface-2); }
-.connection-modal > footer .modal-result { flex: 1; min-width: 0; min-height: 0; margin: 0 8px 0 0; padding: 0; overflow: hidden; background: transparent; text-overflow: ellipsis; white-space: nowrap; }
+.connection-modal > footer .modal-result { flex: 1; min-width: 0; min-height: 0; margin: 0 8px 0 0; padding: 0; background: transparent; white-space: normal; overflow-wrap: anywhere; max-height: 4.5em; overflow-y: auto; }
 .connection-modal > footer .modal-spacer { display: none; }
 .connection-modal button:disabled { opacity: .5; cursor: wait; }
 #toast { font-size: var(--font-small); }
