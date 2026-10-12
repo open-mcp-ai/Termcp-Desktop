@@ -1,5 +1,13 @@
 # 程序验证记录
 
+## 侧边栏展开溢出修复（2026-10-12，issue #17）
+
+- 根因：主体网格未约束行高，固定侧边栏展开较长的 Shell 列表时，`auto` 行高按内容增长，将底部 Shell 标签栏和设置导航推到窗口外。
+- 修复：主体网格使用 `minmax(0, 1fr)` 分配窗口剩余高度，长资源树由现有 `.tree-scroll` 滚动。
+- 浏览器回归：实际展开含 30 个额外 Shell 的会话，验证 1280、800、640 宽度、720/480 高度、分组折叠/展开以及固定/浮动/收起侧栏；底栏始终可见，最后一个 Shell 可滚动到达。修复前 1280 和 800 宽度测试失败，修复后三项通过。
+- 运行方式：先执行 `npm exec --prefix frontend -- playwright install chromium`，再执行 `npm --prefix frontend run test:layout`；Linux CI 自动安装 Chromium 并运行回归测试。
+- 完整检查：`npm run check` 通过，包括版本校验、4 项发布脚本测试、27 项前端单元测试、Vite build、Go 测试和 `go vet`。
+
 ## termcp Core v0.2.5 集成（2026-10-02）
 
 | 检查 | 结果 |

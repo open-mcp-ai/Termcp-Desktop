@@ -74,7 +74,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .window-controls button { color: var(--muted); }
 .window-controls button:hover { background: var(--surface-3); }
 
-.body { grid-template-columns: 60px 286px minmax(0, 1fr); }
+/* Keep expanded resource trees inside the available window height. */
+.body { grid-template-columns: 60px 286px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .rail { background: var(--rail); border-color: rgb(255 255 255 / 8%); padding-top: 13px; }
 .rail-logo { color: #dce6f2; border-color: rgb(255 255 255 / 22%); margin-bottom: 20px; }
 .rail button { color: #8998aa; }

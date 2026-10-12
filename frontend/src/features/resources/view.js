@@ -27,7 +27,7 @@ function sessionNode(session) {
 
 function shellNode(shell, session) {
   const tags = tagsFor('shell', shell.id);
-  return `<button class="tree-row leaf ${state.selected.type === 'shell' && state.selected.id === shell.id ? 'selected' : ''}" data-open-shell="${esc(shell.id)}" data-session="${esc(session.id)}"><span class="terminal-glyph">›_</span><span><b>${esc(shell.name || 'shell')}</b><small>${esc(session.name)} · ${esc(shell.status)}${tags.length ? ` · #${esc(tags.join(' #'))}` : ''}</small></span></button>`;
+  return `<button class="tree-row leaf ${state.selected.type === 'shell' && state.selected.id === shell.id ? 'selected' : ''}" data-open-shell="${esc(shell.id)}" data-shell-context="${esc(shell.id)}" data-session="${esc(session.id)}"><span class="terminal-glyph">›_</span><span><b>${esc(shell.name || 'shell')}</b><small>${esc(session.name)} · ${esc(shell.status)}${tags.length ? ` · #${esc(tags.join(' #'))}` : ''}</small></span></button>`;
 }
 
 const historyNode = item => `<button class="tree-row leaf ${state.selected.type === 'history' && state.selected.id === item.id ? 'selected' : ''}" data-select="history:${esc(item.id)}">${icon('history', 13)}<span><b>${esc(item.name)}</b><small>${esc(item.status || 'exited')} · ${(item.shells || []).length} shells${tagsFor('history', item.id).length ? ` · #${esc(tagsFor('history', item.id).join(' #'))}` : ''}</small></span></button>`;
