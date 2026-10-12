@@ -3,11 +3,12 @@ name: Release
 on:
   push:
     tags:
+      # GitHub validates this glob before any job runs; the version script checks vX.Y.Z.
       - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
-        description: Release version in vX.Y.Z format
+        description: Desktop release tag in vX.Y.Z format
         required: true
         type: string
 
@@ -27,6 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      core_version: ${{ steps.version.outputs.core_version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Check out source
@@ -36,10 +38,15 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - name: Validate and normalise version
+      - name: Validate release tag and version metadata
         id: version
         shell: bash
-        run: node scripts/set-release-version.mjs "$RELEASE_REF" >> "$GITHUB_OUTPUT"
+        run: node scripts/set-release-version.mjs --check "$RELEASE_REF" >> "$GITHUB_OUTPUT"
+      - name: Verify release tag points at this source
+        shell: bash
+        run: |
+          git fetch --no-tags origin "refs/tags/$RELEASE_REF:refs/tags/$RELEASE_REF"
+          test "$(git rev-list -n1 "$RELEASE_REF")" = "$(git rev-parse HEAD)"
 
   test:
     name: Cross-platform tests
@@ -88,10 +95,6 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Apply release version
-        shell: bash
-        run: node scripts/set-release-version.mjs "${{ needs.metadata.outputs.version }}"
 
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
@@ -184,13 +187,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           VERSION: ${{ needs.metadata.outputs.version }}
+          CORE_VERSION: ${{ needs.metadata.outputs.core_version }}
         run: |
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
           else
+            notes=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$RELEASE_TAG" --jq '.body')
+            {
+              printf 'Bundled termcp Core: v%s\n\n' "$CORE_VERSION"
+              printf '%s\n' "$notes"
+            } > release-notes.md
             gh release create "$RELEASE_TAG" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "Termcp $VERSION" \
-              --generate-notes
+              --title "Termcp Desktop $VERSION" \
+              --notes-file release-notes.md \
+              --verify-tag \
+              --latest
           fi

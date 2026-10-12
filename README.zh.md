@@ -154,7 +154,7 @@ npm run build
 
 macOS 构建结果位于 `build/bin/Termcp.app`。Windows 产出 `Termcp.exe`，Linux 产出原生可执行文件。发布构建应在各目标操作系统上分别执行，以使用对应的 WebView 与打包工具链。
 
-桌面端版本跟随 `go.mod` 中锁定的 termcp Core 发布版本。准备新版本时，先升级该依赖，再运行 `npm run release:version -- X.Y.Z`。`npm run check` 与 `npm run build` 会校验所有 GUI 版本字段均与 Core 一致；当前集成版本为 v0.2.5。
+桌面端继续按独立的 `v0.1.x` 版本序列发布，新发布标签只包含桌面端版本（`vX.Y.Z`）。`go.mod` 锁定的 termcp Core 版本会写入 GitHub Release 说明，设置页同时显示桌面端和 Core 版本。每次发布都递增桌面端补丁版本，升级 Core 时也一样。用 `npm run release:version -- v0.1.2` 准备版本；脚本会读取 `go.mod` 中的 Core 版本并更新程序内显示的版本字段。`npm run check` 会校验这些字段，发布工作流会校验桌面端标签与源码版本一致。此前发布的 `v0.2.5+core.0.2.5` 安装包保留原版本，新一轮 `v0.1.x` 从 `v0.1.2` 开始。
 
 ### 项目结构
 

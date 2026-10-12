@@ -154,7 +154,7 @@ npm run build
 
 On macOS, the build output is `build/bin/Termcp.app`. Windows produces `Termcp.exe`, and Linux produces a native executable. Release packages should be built on their target operating systems so they use the corresponding WebView and packaging toolchain.
 
-The desktop version follows the pinned termcp Core release in `go.mod`. To prepare a release, update that dependency first, then run `npm run release:version -- X.Y.Z`. `npm run check` and `npm run build` verify that all GUI version fields match Core; this integration targets v0.2.5.
+The desktop continues its own `v0.1.x` release series independently of termcp Core. New release tags contain only the desktop version (`vX.Y.Z`); each GitHub Release notes the bundled Core version, and Settings shows both versions. Increment the desktop patch version for each release, including Core upgrades. Prepare a release with `npm run release:version -- v0.1.2`. The script reads the pinned Core release from `go.mod` and updates the versions shown in the app. `npm run check` verifies all version fields, and the Release workflow verifies the desktop tag against the checked-in version. Previously published `v0.2.5+core.0.2.5` artifacts retain their original version; the resumed `v0.1.x` series starts at `v0.1.2`.
 
 ### Project structure
 
@@ -187,7 +187,7 @@ prototype/         Archived interaction prototypes
 
 ## CI and Releases
 
-GitHub Actions runs frontend tests, release builds, Go unit tests, coverage collection, `go vet`, and native Wails builds on Windows, Linux, and macOS. Pushing a strict `vX.Y.Z` tag creates a release after all checks pass and publishes `SHA256SUMS` alongside the platform packages.
+GitHub Actions runs frontend tests, release builds, Go unit tests, coverage collection, `go vet`, and native Wails builds on Windows, Linux, and macOS. Pushing a `vX.Y.Z` desktop tag creates a release after all checks pass and publishes `SHA256SUMS` alongside the platform packages. The release notes identify the bundled Core version.
 
 ## Security Boundary
 

@@ -70,6 +70,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --prefix frontend
 
+      - name: Check desktop release version
+        run: |
+          node --test scripts/*.test.mjs
+          node scripts/set-release-version.mjs --check
+
       - name: Run frontend unit tests
         run: npm --prefix frontend test
 
