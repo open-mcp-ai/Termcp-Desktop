@@ -78,7 +78,7 @@ jobs:
       - name: Run frontend unit tests
         run: npm --prefix frontend test
 
-      - name: Run sidebar browser regression tests
+      - name: Run sidebar and history browser regression tests
         if: runner.os == 'Linux'
         run: |
           npm exec --prefix frontend -- playwright install --with-deps chromium

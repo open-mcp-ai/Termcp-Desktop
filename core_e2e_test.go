@@ -209,6 +209,36 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 		t.Fatalf("streamed command generated %d input marks, want one submitted-line mark", inputMarks)
 	}
 	assertAPIStatus(t, app, "GET", "/api/shells/"+url.PathEscape(session.ShellID)+"/output-range?start=0&max=4096", nil, http.StatusOK)
+	// History colours use Core's terminal-row layout, including for archived
+	// shells. Width and screen height must survive the desktop API bridge.
+	for _, cols := range []int{80, 30} {
+		var rail struct {
+			Cols  int `json:"cols"`
+			Top   int `json:"top"`
+			Spans []*struct {
+				Start int64 `json:"start"`
+				End   int64 `json:"end"`
+			} `json:"spans"`
+			Marks []model.HistorySpan `json:"marks"`
+		}
+		path := "/api/shells/" + url.PathEscape(session.ShellID) + "/rail?cols=" + strconv.Itoa(cols) + "&height=24&top=0&count=48"
+		decodeResponse(t, assertAPIStatus(t, app, "GET", path, nil, http.StatusOK), &rail)
+		if rail.Cols != cols || rail.Top != 0 || len(rail.Spans) != 48 || len(rail.Marks) == 0 {
+			t.Fatalf("archived row layout at cols=%d: %+v", cols, rail)
+		}
+		found := false
+		for _, row := range rail.Spans {
+			if row != nil {
+				found = true
+				if row.Start < 0 || row.End <= row.Start {
+					t.Fatalf("invalid archived row byte range: %+v", row)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("archived transcript has no mapped rows")
+		}
+	}
 	assertAPIStatus(t, app, "DELETE", "/api/sessions/"+url.PathEscape(session.SessionID), nil, http.StatusNoContent)
 	assertAPIStatus(t, app, "DELETE", "/api/connections/integration", nil, http.StatusNoContent)
 }

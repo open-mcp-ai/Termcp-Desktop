@@ -19,8 +19,9 @@ Termcp 通过受限 Wails API 桥访问当前 Core 的 `/api/` 路径。终端�
 | 终端流 | `GET /api/ui/ws` | xterm 工作区 | 浏览器协议适配与原生构建 |
 | 输入活动 | WebSocket `shell_activity`（`shell_id`、`src`、`submit`） | Shell 标签中的人类／AI 输入提示 | Core WebSocket 集成测试、前端状态测试 |
 | 已结束会话列表 | `GET /api/sessions`、`GET /api/sessions/{id}/shells` | 历史页 | 快照与集成测试 |
-| 对话索引 | `GET /api/shells/{id}/marks`（与 MCP `message(action=list)` 同源） | 历史时间线 | 集成测试 |
-| 历史输出 | `GET /api/shells/{id}/output-range` | 片段预览、终端回放 | 集成测试 |
+| 对话索引 | `GET /api/shells/{id}/marks`（与 MCP `message(action=list)` 同源） | 保留的索引绑定 | 集成测试 |
+| 历史行映射 | `GET /api/shells/{id}/rail` | 只读终端逐行颜色带、来源与时间 | 归档 Core 集成测试、浏览器滚动/缩放回归 |
+| 历史输出 | `GET /api/shells/{id}/output-range` | 从字节 0 分页连续回放 | 集成测试、UTF-8 与 ANSI 浏览器回归 |
 | 历史改名/删除 | `PATCH/DELETE /api/sessions/{id}` | 历史详情 | 集成测试 |
 | 资源标签 | 桌面端本地存储 | 连接、会话、Shell 详情与筛选 | 前端测试 |
 | 全部/会话转发 | `GET /api/forwards`, `GET/POST /api/sessions/{id}/forwards` | 右侧转发面板 | 集成测试 |

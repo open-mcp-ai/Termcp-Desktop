@@ -3,7 +3,6 @@ import { state } from '../../state.js';
 import { button, emptyPage, emptyState, header } from '../../ui/components.js';
 import { tagsFor } from './tags.js';
 import { effectiveApproval, policyFor } from '../approval/policy.js';
-import { historyPreviewSpan, readableTerminalText } from './history.js';
 
 function tagSection(type, id, label = 'Tags') {
   const tags = tagsFor(type, id);
@@ -51,35 +50,26 @@ function formatHistoryTime(value) {
   return Number.isFinite(time) && time > 0 ? new Date(time).toLocaleString() : 'Time unavailable';
 }
 
-const spanLabels = { o: 'Terminal output', a: 'AI input', i: 'Human input', q: 'Approval requested', A: 'Approved input' };
-
 export function historyPage(item) {
   if (!item) return historyIndexPage();
   const shellID = state.historyShellID || item.shells?.[0]?.id || '';
-  const spans = state.historySpans;
-  const selected = spans[state.historySpanIndex];
-  const preview = historyPreviewSpan(spans, state.historySpanIndex);
-  const more = preview && state.historyNextOffset < preview.end && state.historyText ? button('Load more output', 'history-more') : '';
-  const transcript = state.historyError ? `<div class="inspector-error">${esc(state.historyError)}</div>` : state.historyLoading ? emptyState('Loading conversation index…') : selected ? preview ? `<pre class="transcript">${esc(state.historyText ? readableTerminalText(state.historyText) : 'Loading output…')}</pre>${more}` : emptyState(['i', 'a', 'A'].includes(selected.status) ? 'Input events are markers only; Core does not store their text.' : 'This event has no terminal output bytes.') : emptyState('Select an index entry to inspect its output.');
-  const actions = button(`${icon('edit', 14)}Rename`, 'rename-session', '', `data-id="${esc(item.id)}"`)
-    + (shellID ? button(`${icon('download', 14)}Export raw log`, 'export-history-log', '', `data-id="${esc(item.id)}"`) : '')
-    + button(`${icon('trash', 14)}Delete permanently`, 'delete-history', 'danger', `data-id="${esc(item.id)}"`);
-  const shellTabs = (item.shells || []).map(shell => `<button class="button ${shell.id === shellID ? 'active' : ''}" data-history-shell="${esc(shell.id)}">${esc(shell.name || shell.id)} · ${esc(shell.mode || 'pty')}</button>`).join('') || '<span>No retained shells</span>';
-  const events = spans.map((span, index) => `<button class="history-event ${index === state.historySpanIndex ? 'active' : ''}" data-history-span="${index}"><b>${esc(spanLabels[span.status] || span.status)}</b><small>${esc(formatHistoryTime(span.time))}</small><code>${span.start}–${span.end}</code></button>`).join('') || emptyState('No indexed events for this shell.');
+  const actions = button(`${icon('edit', 14)}<span class="history-action-label">Rename</span>`, 'rename-session', '', `data-id="${esc(item.id)}" title="Rename" aria-label="Rename"`)
+    + (shellID ? button(`${icon('download', 14)}<span class="history-action-label">Export raw log</span>`, 'export-history-log', '', `data-id="${esc(item.id)}" title="Export raw log" aria-label="Export raw log"`) : '')
+    + button(`${icon('trash', 14)}<span class="history-action-label">Delete permanently</span>`, 'delete-history', 'danger', `data-id="${esc(item.id)}" title="Delete permanently" aria-label="Delete permanently"`);
+  const shellTabs = (item.shells || []).map(shell => `<button class="button ${shell.id === shellID ? 'active' : ''}" data-history-shell="${esc(shell.id)}" aria-pressed="${shell.id === shellID}">${esc(shell.name || shell.id)} · ${esc(shell.mode || 'pty')}</button>`).join('');
   return `<div class="history-page">${header(item.name, 'CONVERSATION HISTORY', actions)}
-    <section class="panel history-detail"><span class="archive-badge">Read-only session</span><dl><div><dt>Connection</dt><dd>${esc(item.ssh_endpoint || 'remote')}</dd></div><div><dt>Ended</dt><dd>${esc(formatHistoryTime(item.updated_at))}</dd></div><div><dt>Shells</dt><dd>${(item.shells || []).length}</dd></div></dl></section>
-    ${tagSection('history', item.id)}
-    <div class="history-workspace">
-      <section class="history-events-panel" data-shell-id="${esc(shellID)}" aria-label="Shell timeline">
-        <div class="section-title"><h2>Shell timeline</h2></div>
-        <p class="history-index-note">Input markers record submitted lines. Output ranges are separate; the index does not pair commands with results.</p>
-        <div class="history-shells">${shellTabs}</div>
-        ${shellID ? tagSection('shell', shellID, 'Shell tags') : ''}
-        <div class="history-timeline" data-shell-id="${esc(shellID)}">${events}</div>
-      </section>
-      <section class="history-output-panel" aria-label="Event content">
-        <div class="section-title"><h2>${esc(selected ? spanLabels[selected.status] || selected.status : 'Output')}</h2><span>${selected ? `${preview ? preview.end - preview.start : 0} bytes` : 'Select an event'}</span></div>
-        <div class="history-output-scroll" data-shell-id="${esc(shellID)}" data-span-index="${state.historySpanIndex}">${transcript}</div>
-      </section>
-    </div></div>`;
+    <details class="history-metadata"><summary><span class="archive-badge">Read-only session</span><span>${esc(item.ssh_endpoint || 'remote')} · ${esc(formatHistoryTime(item.updated_at))}</span><span>Session details and tags</span></summary>
+      <div class="history-metadata-body">${tagSection('history', item.id)}${shellID ? tagSection('shell', shellID, 'Shell tags') : ''}</div>
+    </details>
+    <section class="history-workspace" aria-label="Read-only history">
+      <div class="history-toolbar"><div class="history-shells" aria-label="Retained shells">${shellTabs || '<span>No retained shells</span>'}</div>
+        <div class="history-legend" aria-label="Input and output colours"><span><i class="history-colour-input"></i>Human input</span><span><i class="history-colour-agent"></i>AI input</span><span><i class="history-colour-output"></i>Terminal output</span></div>
+        <div class="history-controls">${button('Tint full rows', 'history-tint-rows', state.historyTintRows ? 'active' : '', `aria-pressed="${state.historyTintRows}" title="Tint full rows"`)}${button(icon('refresh', 14), 'history-reload', '', 'title="Reload history" aria-label="Reload history"')}</div>
+      </div>
+      <div class="history-replay"><div class="history-terminal" data-history-terminal="${esc(shellID)}" aria-label="Terminal history"></div>
+        <div class="history-status" role="status" ${state.historyLoading || state.historyError || !shellID ? '' : 'hidden'}>${esc(state.historyError || (shellID ? 'Loading terminal history…' : 'No retained shells'))}</div>
+      </div>
+      <footer class="history-footer"><span class="history-row-detail" aria-live="polite">Hover or select a colour marker to inspect its source and time.</span></footer>
+      <p class="history-rail-status" role="status" hidden></p>
+    </section></div>`;
 }

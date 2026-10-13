@@ -19,7 +19,7 @@ import { rail, explorer, tree } from './features/resources/view.js';
 import { connectionPage, historyIndexPage, historyPage, sessionPage, shellPage } from './features/resources/pages.js';
 import { moveTags, setTags } from './features/resources/tags.js';
 import { commandLinePayload } from './features/resources/command.js';
-import { historyPreviewSpan } from './features/resources/history.js';
+import { HistoryTerminalController } from './features/resources/history-terminal.js';
 import { SessionCreationCoordinator } from './features/resources/session-create.js';
 import { approvalMenu, approvalPage, approvalPrompt, pendingApprovals } from './features/approval/view.js';
 import { approvalSettings, effectiveApproval, moveConnectionPolicy, policyFor, rememberPolicies, removeConnectionPolicy, setConnectionPolicy, setDesktopNotifications, setGlobalApproval, withDefaultApproval } from './features/approval/policy.js';
@@ -39,7 +39,10 @@ if (!core.preview && /Macintosh|Mac OS X/.test(navigator.userAgent)) {
 let refreshTimer;
 let connectionClickTimer;
 let inspectorRequest = 0;
-let historyRequest = 0;
+const historyTerminal = new HistoryTerminalController(core, ({ loading, error }) => {
+  state.historyLoading = loading;
+  state.historyError = error;
+});
 let approvalSync = null;
 let sidebarHideTimer;
 let lastRenderedWorkspaceID = '';
@@ -193,14 +196,7 @@ function showActiveTab() {
 
 function render() {
   const historyView = state.section === 'history' && state.selected.type === 'history' ? state.selected.id : '';
-  const previousContent = document.querySelector('#main-content');
-  const historyScrollTop = historyView && previousContent?.dataset.historyView === historyView ? previousContent.scrollTop : null;
-  const previousTimeline = historyScrollTop !== null ? previousContent.querySelector('.history-timeline') : null;
-  const timelineScrollTop = previousTimeline?.dataset.shellId === state.historyShellID ? previousTimeline.scrollTop : null;
-  const previousEvents = historyScrollTop !== null ? previousContent.querySelector('.history-events-panel') : null;
-  const eventsScrollTop = previousEvents?.dataset.shellId === state.historyShellID ? previousEvents.scrollTop : null;
-  const previousOutput = historyScrollTop !== null ? previousContent.querySelector('.history-output-scroll') : null;
-  const outputScrollTop = previousOutput?.dataset.shellId === state.historyShellID && Number(previousOutput.dataset.spanIndex) === state.historySpanIndex ? previousOutput.scrollTop : null;
+  historyTerminal.detach();
   const previousTabScrollLeft = document.querySelector('.workspace-tab-scroll')?.scrollLeft || 0;
   terminals.detachAll();
   const fullWidth = state.section === 'settings' || state.section === 'approvals' || state.section === 'integrations';
@@ -214,15 +210,7 @@ function render() {
     if (lastRenderedWorkspaceID !== state.activeWorkspace) showActiveTab();
     lastRenderedWorkspaceID = state.activeWorkspace;
   }
-  if (historyScrollTop !== null) {
-    document.querySelector('#main-content').scrollTop = historyScrollTop;
-    const timeline = document.querySelector('.history-timeline');
-    if (timeline && timelineScrollTop !== null) timeline.scrollTop = timelineScrollTop;
-    const events = document.querySelector('.history-events-panel');
-    if (events && eventsScrollTop !== null) events.scrollTop = eventsScrollTop;
-    const output = document.querySelector('.history-output-scroll');
-    if (output && outputScrollTop !== null) output.scrollTop = outputScrollTop;
-  }
+  historyTerminal.mount(document.querySelector('[data-history-terminal]'), state.historyShellID, state.historyTintRows);
   if (state.section === 'workspace') mountWorkspace();
   const liveShells = new Set(state.data.sessions.flatMap(session => (session.shells || []).map(shell => shell.id)));
   terminals.retain(liveShells);
@@ -697,7 +685,6 @@ document.addEventListener('click', async event => {
     return;
   }
   if (target.dataset.historyShell) { await loadHistoryIndex(state.selected.id, target.dataset.historyShell); return; }
-  if (target.dataset.historySpan !== undefined) { await loadHistorySpan(Number(target.dataset.historySpan)); return; }
   if (target.dataset.openSession) { openSession(target.dataset.openSession); return; }
   if (target.dataset.openShell) { openShell(target.dataset.openShell, target.dataset.session); return; }
   if (target.dataset.workspace) { state.activeWorkspace = target.dataset.workspace; state.section = 'workspace'; saveWorkspaces(); render(); return; }
@@ -774,7 +761,15 @@ document.addEventListener('click', async event => {
   if (action === 'new-forward') { state.dialog = { type: 'forward', session: state.inspector.sessionID }; render(); return; }
   if (action === 'edit-tags') { state.dialog = { type: 'tags', kind: target.dataset.kind, id: target.dataset.id }; render(); return; }
   if (action === 'export-history-log') { await run('', async () => { const path = await core.saveConversationLog(target.dataset.id, state.historyShellID); if (path) toast('Log saved', 'success'); }, { refresh: false }); return; }
-  if (action === 'history-more') { await loadHistorySpan(state.historySpanIndex, true); return; }
+  if (action === 'history-reload') { historyTerminal.dispose(); await loadHistoryIndex(state.selected.id, state.historyShellID); return; }
+  if (action === 'history-tint-rows') {
+    state.historyTintRows = !state.historyTintRows;
+    localStorage.setItem('termcp-desktop-history-tint-rows', state.historyTintRows ? '1' : '0');
+    target.setAttribute('aria-pressed', String(state.historyTintRows));
+    target.classList.toggle('active', state.historyTintRows);
+    historyTerminal.setTintRows(state.historyTintRows);
+    return;
+  }
   if (action === 'delete-history') { confirmDialog('Delete history entry', 'The transcript and related messages will be permanently deleted.', 'delete-history', target.dataset.id, 'Delete'); return; }
   if (action === 'history-search') { await searchHistory(); return; }
   if (action === 'test-editor-connection') {
@@ -1086,63 +1081,10 @@ async function searchHistory() {
 
 async function loadHistoryIndex(sessionID, shellID = '') {
   const item = historyByID(sessionID);
-  const selectedShell = shellID || item?.shells?.[0]?.id || '';
-  const request = ++historyRequest;
-  state.historyShellID = selectedShell;
-  state.historySpans = [];
-  state.historySpanIndex = -1;
-  state.historyText = '';
-  state.historyNextOffset = 0;
-  state.historyError = '';
-  state.historyLoading = Boolean(selectedShell);
-  render();
-  if (!selectedShell) return;
-  try {
-    let spans = await core.conversationIndex(sessionID, selectedShell);
-    if (!spans?.length) {
-      const output = await core.api('GET', `/api/shells/${encode(selectedShell)}/output-range?start=0&max=1`);
-      if (output.data?.total > 0) spans = [{ status: 'o', time: item.updated_at, start: 0, end: output.data.total }];
-    }
-    if (request !== historyRequest || state.selected.id !== sessionID) return;
-    state.historySpans = Array.isArray(spans) ? spans : [];
-    state.historyLoading = false;
-    render();
-    const firstOutput = state.historySpans.findIndex(span => span.status === 'o' && span.end > span.start);
-    if (firstOutput >= 0) await loadHistorySpan(firstOutput);
-  } catch (error) {
-    if (request !== historyRequest) return;
-    state.historyLoading = false;
-    state.historyError = String(error);
-    render();
-  }
-}
-
-async function loadHistorySpan(index, append = false) {
-  const selected = state.historySpans[index];
-  if (!selected) return;
-  const span = historyPreviewSpan(state.historySpans, index);
-  const request = ++historyRequest;
-  const sessionID = state.selected.id;
-  const shellID = state.historyShellID;
-  const start = append ? state.historyNextOffset : span?.start;
-  state.historySpanIndex = index;
-  if (!append) { state.historyText = ''; state.historyNextOffset = span?.start || 0; }
+  state.historyShellID = shellID || item?.shells?.[0]?.id || '';
+  state.historyLoading = Boolean(state.historyShellID);
   state.historyError = '';
   render();
-  if (!span) return;
-  try {
-    const result = await core.api('GET', `/api/shells/${encode(shellID)}/output-range?start=${start}&max=${Math.min(524288, span.end - start)}`);
-    if (request !== historyRequest || state.selected.id !== sessionID || state.historyShellID !== shellID) return;
-    if (append) state.historyText += result.data?.d || '';
-    else state.historyText = result.data?.d || '';
-    state.historyNextOffset = Math.min(span.end, Number(result.data?.end || start));
-    if (state.historyNextOffset <= start) state.historyNextOffset = span.end;
-    render();
-  } catch (error) {
-    if (request !== historyRequest) return;
-    state.historyError = String(error);
-    render();
-  }
 }
 
 window.runtime?.EventsOn?.('termcp:navigate', section => navigateToSection(section));

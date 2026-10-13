@@ -30,13 +30,13 @@ flowchart TB
 2. 注册服务时，先停止进程内 Core，再写入平台服务定义，以同一可执行文件的 `--core-service` 模式启动并等待本机 API 就绪。
 3. 已注册服务时，GUI 只附着本机 API；关闭桌面窗口不停止服务进程。
 4. 卸载服务时，先停止服务、移除定义，再立即恢复进程内 Core，保证桌面端继续可用。
-5. Core 就绪后，资源管理器从 `/api/connections`、`/api/sessions`、`/api/forwards` 生成快照，并通过 `/api/version` 显示当前应答实例的版本；已结束的 session 进入历史视图。桌面端通过 `/api/shells/{id}/marks` 读取索引，再通过 output-range 接口读取内容。输入标记只在提交整行时生成；片段输入不会各自产生标记。
+5. Core 就绪后，资源管理器从 `/api/connections`、`/api/sessions`、`/api/forwards` 生成快照，并通过 `/api/version` 显示当前应答实例的版本；已结束的 session 进入历史视图。历史页从字节 0 分页读取 `/api/shells/{id}/output-range`，在独立的只读 xterm 中连续回放，通过 `/api/shells/{id}/rail?cols=…&height=…&top=…&count=…` 获取可见终端行的字节区间和来源标记。人工输入为黄色，AI 输入为粉色，输出为绿色；颜色带以 `.xterm-screen` 的实际位置和行高对齐，滚动、字体和窗口尺寸变化时重新读取行映射。输入标记只在提交整行时生成；片段输入不会各自产生标记，命令正文取自终端回显。
 
 所有 Wails 绑定、Core 生命周期、系统服务操作、GUI 到 Core 的出站请求，以及 Core 的入站 HTTP 接口共享结构化日志字段。日志不记录请求正文、凭据和查询参数值；单文件 10 MiB 或跨日轮转，保留 14 天。
 
 ## 工作台渲染生命周期
 
-应用外壳可以按状态重新渲染，但 xterm 实例不随页面 DOM 销毁。渲染前终端 DOM 被移入内存片段，渲染后挂载到新的活动窗格；不活动会话继续保留滚动缓冲和 WebSocket watch。只有对应 Shell 从 Core 快照中消失时才释放实例。文件面板按会话、标签和路径缓存，并丢弃快速切换产生的过期异步响应。
+应用外壳可以按状态重新渲染，但 xterm 实例不随页面 DOM 销毁。渲染前终端 DOM 被移入内存片段，渲染后挂载到新的活动窗格；不活动会话继续保留滚动缓冲和 WebSocket watch。只有对应 Shell 从 Core 快照中消失时才释放实例。历史终端同样保留 DOM、滚动缓冲和选择区域，只在切换历史 Shell、重新加载或离开历史详情时释放；它没有 WebSocket 输入、watch 或 PTY resize。回放与行映射请求都丢弃已切换 Shell 的过期响应，UTF-8 字符跨分页时重读末尾不完整字节。文件面板按会话、标签和路径缓存，并丢弃快速切换产生的过期异步响应。
 
 平台服务后端分别为 macOS LaunchAgent、Linux systemd 用户服务和 Windows Service Control Manager。Windows 的服务入口使用 SCM 控制分派器处理 Stop 与 Shutdown，以专用的 `NT SERVICE\\termcp-desktop-core` 虚拟账户运行，只授予它访问当前 Core 数据目录的权限，并在需要修改 SCM 时请求 UAC；Linux/macOS 使用 SIGTERM 完成有序关闭。
 

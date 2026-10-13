@@ -25,6 +25,18 @@ function reportFrontend(level, message, details = '') {
 }
 
 const now = new Date().toISOString();
+const demoHistoryLines = ['$ npm test\r\n', '✓ all tests passed\r\n', '$ go version\r\n', 'go version go1.25.9\r\n', '$ '];
+const demoHistoryLog = demoHistoryLines.join('');
+const demoHistoryRows = demoHistoryLines.map((line, index) => ({
+  start: new TextEncoder().encode(demoHistoryLines.slice(0, index).join('')).length,
+  end: new TextEncoder().encode(demoHistoryLines.slice(0, index + 1).join('')).length,
+}));
+const demoHistoryMarks = [
+  { status: 'i', time: Date.now() - 3000, start: 0, end: 0 },
+  { status: 'o', time: Date.now() - 2900, start: 0, end: demoHistoryRows[2].start },
+  { status: 'a', time: Date.now() - 2000, start: demoHistoryRows[2].start, end: demoHistoryRows[2].start },
+  { status: 'o', time: Date.now() - 1900, start: demoHistoryRows[2].start, end: demoHistoryRows.at(-1).end },
+];
 const demo = {
   core: { running: true, managed: true, address: 'http://127.0.0.1:18765', version: `v${bundledCoreVersion}`, state: 'running' },
   connections: [
@@ -175,11 +187,18 @@ function demoAPI(method, rawPath, body) {
   if (method === 'GET' && url.pathname === '/api/notifications') return response({ notifications: [{ id: 'notify-demo-01', session_id: 'session-demo-01', shell_id: 'shell-demo-01', event: 'process_exit', created_at: now }] });
   if (parts[1] === 'notifications' && method === 'DELETE') return response({ ok: true });
   if (parts[1] === 'shells' && parts[3] === 'output-range') {
-    const output = parts[2] === 'history-shell-01' ? '$ npm test\r\n✓ all tests passed\r\n' : 'Termcp preview\r\n$ go test ./...\r\nok  termcp/gui\r\n$ ';
+    const output = parts[2] === 'history-shell-01' ? demoHistoryLog : 'Termcp preview\r\n$ go test ./...\r\nok  termcp/gui\r\n$ ';
     const bytes = new TextEncoder().encode(output);
     const start = url.searchParams.has('tail') ? 0 : Number(url.searchParams.get('start') || 0);
     const chunk = bytes.slice(start, start + Number(url.searchParams.get('max') || bytes.length));
     return response({ start, end: start + chunk.length, total: bytes.length, d: new TextDecoder().decode(chunk) });
+  }
+  if (parts[1] === 'shells' && parts[2] === 'history-shell-01' && parts[3] === 'rail') {
+    const cols = Number(url.searchParams.get('cols'));
+    const top = Number(url.searchParams.get('top')) || 0;
+    const count = Number(url.searchParams.get('count')) || 0;
+    return response({ cols, top, total_rows: demoHistoryRows.length,
+      spans: Array.from({ length: count }, (_, index) => demoHistoryRows[top + index] || null), marks: demoHistoryMarks });
   }
   if (parts[1] === 'shells' && method === 'DELETE') return response('');
   return response({});
@@ -194,10 +213,7 @@ export const core = {
   },
   async conversationIndex(sessionID, shellID) {
     if (bridge.available()) return bridge.call('GetConversationIndex', sessionID, shellID);
-    return shellID === 'history-shell-01' ? [
-      { status: 'i', time: Date.now() - 3000, start: 0, end: 0 },
-      { status: 'o', time: Date.now() - 2900, start: 0, end: 33 },
-    ] : [];
+    return shellID === 'history-shell-01' ? clone(demoHistoryMarks) : [];
   },
   async saveConversationLog(sessionID, shellID) {
     if (!bridge.available()) throw new Error(t('Local downloads are disabled in browser preview'));
