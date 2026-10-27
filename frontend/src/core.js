@@ -58,6 +58,11 @@ const demo = {
       { id: 'history-shell-01', name: 'release', status: 'exited', mode: 'pty' },
     ] },
   ],
+  extensions: [
+    { name: 'docs', kind: 'skill', target: 'internal', description: 'Read-only documentation window', enabled: true, status: 'idle', forwards: [] },
+    { name: 'release-check', kind: 'mcp', target: 'dev-server', description: 'Release inspection MCP server', enabled: true, status: 'unavailable', failure: { at: Date.now() - 30000, stage: 'start', reason: 'stderr: command not found: release-mcp' }, next_retry_ms: Date.now() + 12000, forwards: [] },
+    { name: 'audit-console', kind: 'prompt', target: 'staging', description: 'Investigative shell with audit notes', enabled: true, status: 'available', session_id: 'ext-session-audit', shell_id: 'ext-shell-audit', forwards: [] },
+  ],
   forwards: [],
   fetched_at: now,
   preview: true,
@@ -84,7 +89,22 @@ const demoConnections = new Map([
   ['staging', 'kind = "remote"\nhost = "staging.example.test"\nuser = "operator"\nport = 22\npassword = ""\nprivate_key = """\n"""\n'],
 ]);
 
+const demoExtensions = new Map(demo.extensions.map(extension => [extension.name, extension]));
+const demoExtensionDocuments = new Map([
+  ['docs', 'kind = "skill"\ntarget = "internal"\ndescription = "Read-only documentation window"\npaths = ["~/skills/docs/"]\n'],
+  ['release-check', 'kind = "mcp"\ntarget = "dev-server"\ndescription = "Release inspection MCP server"\nmode = "pipe"\ncommand = "release-mcp"\n'],
+  ['audit-console', 'kind = "prompt"\ntarget = "staging"\ndescription = "Investigative shell with audit notes"\nmode = "pty"\n'],
+]);
+
 const demoApprovals = [{ request: { id: 'approval-demo-01', session_id: 'session-demo-01', shell_id: 'shell-demo-01', source: 'mcp', kind: 'shell_input', summary: 'Run npm test', text: 'npm test', keys: ['enter'], state: 'pending', created_at: Date.now(), need: 1 }, need: 1 }];
+const demoActivity = [
+  { time: new Date(Date.now() - 180000).toISOString(), unix_ms: Date.now() - 180000, session_id: 'session-demo-01', shell_id: 'shell-demo-01', session_name: 'API development', source: 'ai', kind: 'a', verdict: 'input', bytes: demoHistoryRows[2].start },
+  { time: new Date(Date.now() - 420000).toISOString(), unix_ms: Date.now() - 420000, session_id: 'history-demo-01', shell_id: 'history-shell-01', session_name: 'Release check', source: 'human', kind: 'i', verdict: 'input', bytes: 0 },
+];
+const demoClients = {
+  webui: [{ id: '1', addr: '127.0.0.1', user_agent: 'Termcp Desktop', watching: 1, since: now, self: true }],
+  mcp: [{ session_id: 'mcp-demo-01', name: 'Claude', version: '1.0', namespace: 'ns:desktop-preview', connected_at: now }],
+};
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -107,10 +127,94 @@ function demoTOMLField(raw, key, fallback = '') {
   try { return JSON.parse(value); } catch { return value.replace(/^['"]|['"]$/g, ''); }
 }
 
+function demoExtensionDocument(summary) {
+  return `kind = "${summary.kind}"\ntarget = "${summary.target}"\n${summary.description ? `description = ${JSON.stringify(summary.description)}\n` : ''}enabled = ${summary.enabled !== false}\n`;
+}
+
+function demoExtensionDetail(extension) {
+  return {
+    extension,
+    kind: extension.kind,
+    mode: extension.kind === 'skill' ? '' : (extension.kind === 'mcp' ? 'pipe' : 'pty'),
+    command: extension.kind === 'mcp' ? 'release-mcp' : '',
+    args: [],
+    allow: [],
+    paths: extension.kind === 'skill' ? ['~/skills/docs/'] : [],
+    notes: '',
+    failures: extension.failure ? [extension.failure] : [],
+    forward_decls: [],
+  };
+}
+
 function demoAPI(method, rawPath, body) {
   const url = new URL(rawPath, 'http://preview.local');
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   const payload = parseBody(body);
+  if (method === 'GET' && url.pathname === '/api/extensions') return response({ extensions: [...demoExtensions.values()] });
+  if (method === 'GET' && url.pathname === '/api/extensions/batch') {
+    const names = (url.searchParams.get('names') || '').split(',').filter(Boolean);
+    const selected = names.length ? names : [...demoExtensionDocuments.keys()];
+    return response(selected.filter(name => demoExtensionDocuments.has(name)).map(name => `[[extensions]]\nname = "${name}"\n${demoExtensionDocuments.get(name)}`).join('\n'), 'application/toml');
+  }
+  if (method === 'POST' && url.pathname === '/api/extensions/batch') {
+    const document = String(body || '');
+    const entries = document.split(/\[\[extensions\]\]/).slice(1);
+    const renamed = [];
+    for (const entry of entries) {
+      const original = demoTOMLField(entry, 'name');
+      if (!original) continue;
+      let name = original;
+      for (let suffix = 2; demoExtensions.has(name); suffix += 1) name = `${original}-${suffix}`;
+      if (name !== original) renamed.push({ from: original, to: name });
+      const extension = { name, kind: demoTOMLField(entry, 'kind', 'custom'), target: demoTOMLField(entry, 'target', ''), description: demoTOMLField(entry, 'description'), enabled: demoTOMLField(entry, 'enabled', true) !== false, status: demoTOMLField(entry, 'enabled', true) !== false ? 'idle' : 'disabled', forwards: [] };
+      demoExtensions.set(name, extension);
+      demoExtensionDocuments.set(name, demoExtensionDocument(extension));
+    }
+    return response({ imported: entries.length, renamed });
+  }
+  if (method === 'POST' && url.pathname === '/api/extensions') {
+    const name = String(payload.name || url.searchParams.get('name') || '').trim();
+    if (!name) return response('name is required', 'text/plain');
+    const extension = { name, kind: payload.kind || 'custom', target: payload.target || '', description: payload.description || '', enabled: payload.enabled !== false, status: payload.enabled === false ? 'disabled' : 'idle', forwards: [] };
+    demoExtensions.set(name, extension);
+    demoExtensionDocuments.set(name, demoExtensionDocument(extension));
+    return response({ extension });
+  }
+  if (parts[1] === 'extensions' && parts[2]) {
+    const name = parts[2];
+    const extension = demoExtensions.get(name);
+    if (!extension) return response({ error: 'extension not found' }, 'application/json');
+    if (method === 'GET' && url.searchParams.get('format') === 'toml') return response(demoExtensionDocuments.get(name) || demoExtensionDocument(extension), 'application/toml');
+    if (method === 'GET') return response(demoExtensionDetail(extension));
+    if (method === 'PUT') {
+      if (typeof payload === 'object' && payload) {
+        Object.assign(extension, {
+          kind: payload.kind ?? extension.kind,
+          target: payload.target ?? extension.target,
+          description: payload.description ?? extension.description,
+          enabled: payload.enabled ?? extension.enabled,
+        });
+        extension.status = extension.enabled ? (extension.status === 'available' ? extension.status : 'idle') : 'disabled';
+        demoExtensionDocuments.set(name, demoExtensionDocument(extension));
+      } else {
+        extension.description = demoTOMLField(body, 'description', extension.description);
+        extension.kind = demoTOMLField(body, 'kind', extension.kind);
+        extension.target = demoTOMLField(body, 'target', extension.target);
+        demoExtensionDocuments.set(name, String(body || ''));
+      }
+      return response({ extension });
+    }
+    if (method === 'DELETE') {
+      demoExtensions.delete(name);
+      demoExtensionDocuments.delete(name);
+      return response('');
+    }
+    if (method === 'POST' && parts[3] === 'retry') {
+      if (!extension.enabled) return response({ ok: false, error: 'extension is disabled; enable it before retrying' });
+      extension.status = extension.name === 'release-check' ? 'unavailable' : 'idle';
+      return response({ ok: true });
+    }
+  }
   if (method === 'GET' && url.pathname === '/api/connections') return response({ connections: demo.connections });
   if (parts[1] === 'connections' && parts[2]) {
     const name = parts[2];
@@ -184,8 +288,6 @@ function demoAPI(method, rawPath, body) {
   }
   if (method === 'GET' && url.pathname === '/api/forwards') return response({ forwards: demo.forwards });
   if (parts[1] === 'forwards' && parts[2] && method === 'DELETE') { demo.forwards = demo.forwards.filter(f => f.id !== parts[2]); return response(''); }
-  if (method === 'GET' && url.pathname === '/api/notifications') return response({ notifications: [{ id: 'notify-demo-01', session_id: 'session-demo-01', shell_id: 'shell-demo-01', event: 'process_exit', created_at: now }] });
-  if (parts[1] === 'notifications' && method === 'DELETE') return response({ ok: true });
   if (parts[1] === 'shells' && parts[3] === 'output-range') {
     const output = parts[2] === 'history-shell-01' ? demoHistoryLog : 'Termcp preview\r\n$ go test ./...\r\nok  termcp/gui\r\n$ ';
     const bytes = new TextEncoder().encode(output);
@@ -193,12 +295,24 @@ function demoAPI(method, rawPath, body) {
     const chunk = bytes.slice(start, start + Number(url.searchParams.get('max') || bytes.length));
     return response({ start, end: start + chunk.length, total: bytes.length, d: new TextDecoder().decode(chunk) });
   }
-  if (parts[1] === 'shells' && parts[2] === 'history-shell-01' && parts[3] === 'rail') {
+  if (parts[1] === 'shells' && parts[3] === 'rail') {
     const cols = Number(url.searchParams.get('cols'));
     const top = Number(url.searchParams.get('top')) || 0;
     const count = Number(url.searchParams.get('count')) || 0;
     return response({ cols, top, total_rows: demoHistoryRows.length,
       spans: Array.from({ length: count }, (_, index) => demoHistoryRows[top + index] || null), marks: demoHistoryMarks });
+  }
+  if (parts[1] === 'shells' && parts[2] && parts[3] === 'archive' && method === 'POST') {
+    for (const session of demo.sessions) {
+      const shell = (session.shells || []).find(item => item.id === parts[2]);
+      if (!shell) continue;
+      session.shells = session.shells.filter(item => item.id !== parts[2]);
+      shell.status = 'exited';
+      shell.archived = true;
+      demo.history.push({ ...session, status: 'running', archived_shells_only: true, shells: [shell] });
+      break;
+    }
+    return response('');
   }
   if (parts[1] === 'shells' && method === 'DELETE') return response('');
   return response({});
@@ -214,6 +328,13 @@ export const core = {
   async conversationIndex(sessionID, shellID) {
     if (bridge.available()) return bridge.call('GetConversationIndex', sessionID, shellID);
     return shellID === 'history-shell-01' ? clone(demoHistoryMarks) : [];
+  },
+  async activity(sessionID = '', limit = 200) {
+    if (bridge.available()) return bridge.call('GetActivity', sessionID, limit);
+    return clone(demoActivity.filter(event => !sessionID || event.session_id === sessionID).slice(0, limit));
+  },
+  async clients() {
+    return bridge.available() ? bridge.call('GetClients') : clone(demoClients);
   },
   async saveConversationLog(sessionID, shellID) {
     if (!bridge.available()) throw new Error(t('Local downloads are disabled in browser preview'));
@@ -249,6 +370,28 @@ export const core = {
   async save(path, filename) {
     if (!bridge.available()) throw new Error(t('Local downloads are disabled in browser preview'));
     return bridge.call('SaveAPIResource', path, filename);
+  },
+  async exportConnections(names, password = '') {
+    if (bridge.available()) return bridge.call('ExportConnections', names, password);
+    return { path: 'termcp-connections.toml', count: names.length, cancelled: false };
+  },
+  async importConnections(password = '') {
+    if (bridge.available()) return bridge.call('ImportConnections', password);
+    return {
+      file_name: 'preview-connections.toml',
+      cancelled: false,
+      imported: 2,
+      renamed: 1,
+      failed: 0,
+      hosts: [
+        { name: 'dev-server', status: 'imported' },
+        { name: 'staging', final_name: 'staging-2', status: 'renamed' },
+      ],
+    };
+  },
+  async archiveShell(shellID) {
+    if (bridge.available()) return bridge.call('ArchiveShell', shellID);
+    return this.api('POST', `/api/shells/${encodeURIComponent(shellID)}/archive`);
   },
   async installService(autostart = true) {
     if (bridge.available()) return bridge.call('InstallCoreService', autostart);

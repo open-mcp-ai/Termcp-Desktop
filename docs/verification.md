@@ -1,5 +1,17 @@
 # 程序验证记录
 
+## termcp Core v0.2.8 运行时与观测集成（2026-10-27）
+
+| 检查 | 结果 |
+| --- | --- |
+| 版本契约 | Desktop 保持 `0.1.2`，`go.mod`、工具链、后端与前端 bundled Core 字段统一为 Go `1.27.3` / Core `v0.2.8`；版本检查通过 |
+| TERM/1 运行时 | 真实 MCP Streamable HTTP 客户端完成 initialize 与 tools/list，仅发现 `term`；`POST /api/term` 返回命令指南 |
+| 生命周期 | 内嵌扩展协调器随 Core 启停；UINotifier、连接者通知、SSH server、MCP server 与存储按顺序释放；Core、桥接与模型包 race 测试通过 |
+| 通知清理 | 已移除 `/api/notifications`、`shell_notify`、Inspector 通知标签及演示夹具；审批角标、应用内提示和 Wails 系统通知仍保留 |
+| Runtime 观测 | `GET /api/activity` 与 `GET /api/clients` 经 Go 模型进入 Runtime 页面；WebSocket `sessions` 帧更新连接者，`shell_activity` 与审批事件刷新活动 |
+| 活动定位 | 点击活动使用 session/shell/byte 打开只读历史，Core rail 将字节定位到终端行并显示焦点；1280/640 宽度浏览器布局与跳转测试通过 |
+| 完整检查 | `npm run check` 通过，包含 39 项前端单元测试、15 项 Playwright 布局测试、Vite build、全部 Go 测试与 `go vet ./...` |
+
 ## 历史记录终端回放与颜色对齐（2026-10-13）
 
 - 根因：原历史页的事件行最小列宽超过左侧面板宽度，偏移数字被裁切；输入事件只有标记，点击后不能回放命令。单段纯文本预览也无法保留完整终端的换行、光标编辑与滚动上下文。

@@ -73,11 +73,12 @@ This is not an Electron wrapper. The desktop shell uses [Wails v2](https://wails
 ## Features
 
 - **Real terminal workspace** — xterm exchanges real PTY bytes through `/api/ui/ws`, synchronizes resize events, and restores scrollback with output-range loading.
-- **Input activity** — Shell tabs show when a person or an AI agent is typing, using Core v0.2.4 activity events.
+- **Input activity** — Shell tabs show when a person or an AI agent is typing, using Core activity events.
 - **Multiple sessions and panes** — workspace tabs, up to four panes, horizontal/vertical/tiled layouts, adjustable ratios, pane maximization, and persisted layouts.
 - **Complete SSH connection lifecycle** — create, edit, test, and delete connection profiles, then open sessions and shells directly from them.
 - **Files and port forwarding** — browse local/SFTP files, upload, download, rename, and create directories; configure Local, Remote, and Dynamic forwards.
 - **Colour-coded conversation history** — replay closed sessions in a read-only terminal with row-aligned markers for human input, AI input, and output, switch retained shells, and export raw terminal logs.
+- **Runtime observability** — inspect recent agent and human actions across sessions, jump to the corresponding read-only terminal row, and see attached Web UI and MCP clients.
 - **Resource tags** — label connections, sessions, and shells locally, then filter the resource explorer by tag.
 - **AI action approvals** — keep approval off by default, set a global default or per-connection override, and review pending AI Shell input, file changes, and port-forward starts. Active sessions can be toggled individually; the app shows a review badge and can request optional system notifications.
 - **Core and system-service management** — install, uninstall, start, stop, restart, and configure autostart. Closing the desktop window does not stop a registered Core service.

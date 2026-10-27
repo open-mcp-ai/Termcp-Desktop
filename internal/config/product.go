@@ -16,7 +16,7 @@ const (
 var ProductVersion = "0.1.2"
 
 // CoreVersion is the bundled termcp Core release pinned in go.mod.
-var CoreVersion = "0.2.5"
+var CoreVersion = "0.2.8"
 
 // DataDir returns the resolved termcp data directory for this process.
 func DataDir() string {

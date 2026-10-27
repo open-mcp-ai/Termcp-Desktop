@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +13,11 @@ import (
 
 	guiConfig "github.com/open-mcp-ai/termcp/gui/internal/config"
 	appLogging "github.com/open-mcp-ai/termcp/gui/internal/logging"
-	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/config"
+	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	mcpmod "github.com/open-mcp-ai/termcp/internal/mcp"
+	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	termcpsftp "github.com/open-mcp-ai/termcp/internal/sftp"
@@ -42,6 +44,7 @@ type Service struct {
 	state    string
 	lastErr  string
 	mcp      *mcpmod.Server
+	ext      *extensions.Reconciler
 	sessions *session.Manager
 	ssh      *sshserver.Server
 	store    *storage.Store
@@ -102,6 +105,7 @@ func (s *Service) Start() error {
 	}
 
 	sshSrv := sshserver.New()
+	mcpbridge.RegisterBuiltin(sshSrv)
 	if err := sshSrv.Start(); err != nil {
 		resultErr = err
 		s.setReady(false, err)
@@ -115,30 +119,47 @@ func (s *Service) Start() error {
 	}
 	sshStore := sshconfig.NewStore(dataDir)
 	forwardMgr := forward.NewForwardManager()
+	extReconciler := extensions.NewReconciler(
+		extensions.NewStore(dataDir), sessMgr, msgMgr, sshStore, forwardMgr,
+	)
+	if err := extReconciler.Start(context.Background()); err != nil {
+		resultErr = err
+		sshSrv.Stop()
+		_ = store.Close()
+		s.setReady(false, err)
+		return err
+	}
 
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	mux := http.NewServeMux()
 	httpServer := &http.Server{Addr: addr, Handler: appLogging.HTTPMiddleware(mux), ReadHeaderTimeout: 10 * time.Second}
 	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, "v"+guiConfig.CoreVersion, mcpmod.WithHTTPServer(httpServer))
+	mcpSrv.SetDocsFS(webui.Assets())
+	mcpSrv.SetExtensionReconciler(extReconciler)
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
 	mux.Handle("POST /message", mcpSrv.MessageHandler())
 	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
+	mux.Handle("POST /api/term", mcpSrv.TermHandler())
 	web := &webui.Handler{
-		Sessions: sessMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(),
+		Sessions: sessMgr, MsgMgr: msgMgr, SSH: sshStore, ForwardMgr: forwardMgr, Extensions: extReconciler,
 		Version: "v" + guiConfig.CoreVersion, StartedAt: started.UTC().Format(time.RFC3339Nano),
 	}
 	web.ExecuteOperation = mcpSrv.ExecuteApprovedOperation
 	registerDesktopRoutes(mux, sessMgr)
 	web.Register(mux)
 	mcpSrv.SetUINotifier(web.BroadcastUINotify)
-	sessMgr.AddApprovalListener(func(_ string, req approval.Request) {
-		if req.ShellID != "" {
-			mcpSrv.NotifyManager().OnApprovalChange(req.ShellID, "approval "+string(req.State))
+	web.MCPConnections = func() []any {
+		conns := mcpSrv.Connections()
+		out := make([]any, len(conns))
+		for i, connection := range conns {
+			out[i] = connection
 		}
-	})
+		return out
+	}
+	mcpSrv.SetConnectionsListener(web.NotifyClientsChanged)
 
 	s.mu.Lock()
-	s.mcp, s.sessions, s.ssh, s.store, s.managed = mcpSrv, sessMgr, sshSrv, store, true
+	s.mcp, s.ext, s.sessions, s.ssh, s.store, s.managed = mcpSrv, extReconciler, sessMgr, sshSrv, store, true
 	s.mu.Unlock()
 	errCh := make(chan error, 1)
 	go func() { errCh <- mcpSrv.Start(addr) }()
@@ -152,6 +173,7 @@ func (s *Service) Start() error {
 		case startErr := <-errCh:
 			if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
 				resultErr = startErr
+				extReconciler.Stop()
 				sshSrv.Stop()
 				_ = store.Close()
 				s.clearManagedResources()
@@ -164,6 +186,7 @@ func (s *Service) Start() error {
 	}
 	err = errors.New("Core 启动超时")
 	resultErr = err
+	extReconciler.Stop()
 	_ = mcpSrv.Stop()
 	sshSrv.Stop()
 	_ = store.Close()
@@ -255,8 +278,11 @@ func (s *Service) Stop() error {
 		return nil
 	}
 	s.state = "stopping"
-	mcpSrv, sessMgr, sshSrv, store := s.mcp, s.sessions, s.ssh, s.store
+	mcpSrv, extReconciler, sessMgr, sshSrv, store := s.mcp, s.ext, s.sessions, s.ssh, s.store
 	s.mu.Unlock()
+	if extReconciler != nil {
+		extReconciler.Stop()
+	}
 	if sessMgr != nil {
 		sessMgr.MarkAllDead()
 	}
@@ -290,7 +316,7 @@ func (s *Service) Stop() error {
 
 func (s *Service) clearManagedResources() {
 	s.mu.Lock()
-	s.mcp, s.sessions, s.ssh, s.store, s.managed = nil, nil, nil, nil, false
+	s.mcp, s.ext, s.sessions, s.ssh, s.store, s.managed = nil, nil, nil, nil, nil, false
 	s.mu.Unlock()
 }
 

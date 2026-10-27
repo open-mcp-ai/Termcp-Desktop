@@ -13,6 +13,12 @@
 .resource-tags b { margin-right: 4px; font-size: var(--font-small); }
 .resource-tags small { color: var(--subtle); }
 .resource-tags .button { flex: none; }
+.tree-group-actions { display: flex; align-items: center; gap: 1px; margin-left: auto; }
+.tree-group-actions .icon-btn { width: 24px; height: 24px; }
+.tree-group-actions .icon-btn:disabled { opacity: .35; }
+.session-summary dl { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.end-reason { max-width: 34ch; overflow-wrap: anywhere; }
+.end-reason.empty-fact { min-height: 1em; }
 .tag-filter {
   display: block;
   width: calc(100% - 24px);
@@ -55,6 +61,7 @@
 :root[data-theme="dark"] .history-row-colour { opacity: .18; }
 .history-rail-cell { position: absolute; left: 0; right: 0; border: 0; padding: 0; margin: 0; border-radius: 0; box-sizing: border-box; cursor: pointer; }
 .history-rail-cell:hover, .history-rail-cell:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; z-index: 1; }
+.history-rail-cell.history-focus-cell { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 2; }
 .history-colour-output { background: var(--history-output); }
 .history-colour-input { background: var(--history-input); }
 .history-colour-agent { background: var(--history-agent); }
@@ -66,6 +73,7 @@
 .history-status { position: absolute; left: 20px; right: 30px; top: 18px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: var(--font-small); }
 .history-status.inspector-error { color: var(--danger); text-align: left; }
 .history-footer { display: flex; align-items: center; flex-wrap: wrap; flex: none; gap: 8px; padding: 9px 14px; border-top: 1px solid var(--line); background: var(--surface-2); }
+.history-end-fact { flex: 1 0 100%; margin: 2px 0 0; color: var(--muted); font-size: var(--font-tiny); }
 .history-row-detail { flex: 1; min-width: 0; color: var(--muted); font-size: var(--font-tiny); overflow-wrap: anywhere; }
 .history-rail-status { flex: none; margin: 0; padding: 8px 14px; color: var(--warning); font-size: var(--font-small); }
 .history-workspace [hidden] { display: none; }

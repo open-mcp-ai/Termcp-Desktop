@@ -102,13 +102,16 @@ func TestAPIRejectsRequestsOutsideCoreAPI(t *testing.T) {
 }
 
 func TestGetSnapshotAggregatesCoreResources(t *testing.T) {
+	t.Setenv("TERMCP_DATA_DIR", t.TempDir())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/connections":
 			_, _ = w.Write([]byte(`{"connections":[{"name":"internal","kind":"internal"}]}`))
+		case "/api/extensions":
+			_, _ = w.Write([]byte(`{"extensions":[{"name":"docs","kind":"skill","target":"internal","enabled":true,"status":"idle"}]}`))
 		case "/api/sessions":
-			_, _ = w.Write([]byte(`{"sessions":[{"id":"session-test","name":"workspace","status":"running","ssh_endpoint":"internal","created_at":1789990000000},{"id":"history-test","name":"previous","status":"exited","updated_at":1789990001000}]}`))
+			_, _ = w.Write([]byte(`{"sessions":[{"id":"session-test","name":"workspace","status":"running","ssh_endpoint":"internal","created_at":1789990000000},{"id":"history-test","name":"previous","status":"exited","exit_reason":"SSH connection lost","updated_at":1789990001000},{"id":"extension-test","name":"ext:internal","status":"running","namespace":"ext:internal"},{"id":"extension-archive","name":"ext:old","status":"exited","namespace":"ext:old"}]}`))
 		case "/api/sessions/session-test/shells":
 			_, _ = w.Write([]byte(`{"shells":[{"id":"shell-test","name":"zsh","status":"running","mode":"pty"}]}`))
 		case "/api/sessions/history-test/shells":
@@ -134,9 +137,54 @@ func TestGetSnapshotAggregatesCoreResources(t *testing.T) {
 	if snapshot.Core.Managed {
 		t.Fatal("mock server should be reported as an externally managed Core")
 	}
-	if len(snapshot.Connections) != 1 || len(snapshot.Sessions) != 1 || len(snapshot.Sessions[0].Shells) != 1 || len(snapshot.History) != 1 || len(snapshot.History[0].Shells) != 1 || snapshot.History[0].UpdatedAt != 1789990001000 {
+	if len(snapshot.Connections) != 1 || len(snapshot.Sessions) != 1 || len(snapshot.Sessions[0].Shells) != 1 || len(snapshot.History) != 1 || len(snapshot.History[0].Shells) != 1 || snapshot.History[0].UpdatedAt != 1789990001000 || snapshot.History[0].ExitReason != "SSH connection lost" || len(snapshot.Extensions) != 1 || snapshot.Extensions[0].Name != "docs" {
 		data, _ := json.Marshal(snapshot)
 		t.Fatalf("incomplete snapshot: %s", data)
+	}
+}
+
+func TestGetActivityAndClientsAggregateCoreObservability(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/sessions":
+			_, _ = w.Write([]byte(`{"sessions":[]}`))
+		case "/api/activity":
+			if got := r.URL.Query().Get("limit"); got != "2000" {
+				t.Errorf("limit = %q, want clamped 2000", got)
+			}
+			if got := r.URL.Query().Get("session_id"); got != "session-one" {
+				t.Errorf("session_id = %q", got)
+			}
+			_, _ = w.Write([]byte(`{"activity":[{"time":"2026-10-27T08:00:00Z","unix_ms":1,"session_id":"session-one","shell_id":"shell-one","session_name":"one","source":"ai","kind":"a","verdict":"input","bytes":42}]}`))
+		case "/api/clients":
+			_, _ = w.Write([]byte(`{"webui":[{"id":"1","addr":"127.0.0.1","watching":1,"since":"2026-10-27T08:00:00Z"}],"mcp":[{"session_id":"mcp-one","name":"agent","version":"1","namespace":"ns:agent","connected_at":"2026-10-27T08:00:00Z"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service := serviceForURL(t, server.URL)
+	if err := service.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Stop() })
+	app := newApp(service)
+
+	activity, err := app.GetActivity("session-one", 9000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activity) != 1 || activity[0].ShellID != "shell-one" || activity[0].Bytes != 42 {
+		t.Fatalf("activity = %+v", activity)
+	}
+	clients, err := app.GetClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clients.WebUI) != 1 || len(clients.MCP) != 1 || clients.MCP[0].Namespace != "ns:agent" {
+		t.Fatalf("clients = %+v", clients)
 	}
 }
 

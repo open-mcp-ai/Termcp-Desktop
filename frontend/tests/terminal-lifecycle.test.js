@@ -84,7 +84,7 @@ globalThis.ResizeObserver = FakeResizeObserver;
 globalThis.WebSocket = { OPEN: 1 };
 
 const { TerminalController, workingDirectoryFromOSC7 } = await import('../src/terminal.js');
-const { renderWorkspacePage } = await import('../src/features/workspace/view.js');
+const { renderTerminalContextMenu, renderWorkspacePage } = await import('../src/features/workspace/view.js');
 
 test('renders the Core input source on each Shell tab', () => {
   const session = { id: 'session-1', name: 'Example', status: 'running', ssh_endpoint: 'internal' };
@@ -105,6 +105,32 @@ test('renders the Core input source on each Shell tab', () => {
   });
   assert.match(html, /data-shell-activity="human-shell" data-kind="human">Human typing…<\/em>/);
   assert.match(html, /data-shell-activity="agent-shell" data-kind="ai">AI typing…<\/em>/);
+});
+
+test('extension infrastructure remains open and cannot create or close ordinary shells', () => {
+  const session = { id: 'ext-session', name: 'Extension · docs', status: 'running', ssh_endpoint: 'remote', namespace: 'ext', shells: [{ id: 'ext-shell', name: 'docs', status: 'running', mode: 'pty' }] };
+  const workspace = {
+    id: 'workspace-1', layout: 'grid', activeShell: 'ext-shell', maximized: '',
+    panes: [{ shellID: 'ext-shell', sessionID: session.id }],
+    shellTabs: [{ shellID: 'ext-shell', sessionID: session.id }],
+  };
+  const shellByID = shellID => shellID === 'ext-shell' ? { ...session.shells[0], session } : null;
+  const page = renderWorkspacePage({
+    state: { workspaces: [workspace], inspector: { collapsed: true }, dropRegion: '', shellModeMenu: null },
+    activeWorkspace: () => workspace,
+    workspaceSession: () => session,
+    shellByID,
+    inspectorShell: () => '',
+  });
+  assert.doesNotMatch(page, /data-close-shell-tab="ext-shell"/);
+  const menu = renderTerminalContextMenu({
+    state: { terminalMenu: { shellID: 'ext-shell', x: 10, y: 10, selection: '' } },
+    shellByID,
+    activeWorkspace: () => workspace,
+  });
+  assert.doesNotMatch(menu, /data-terminal-action="close"/);
+  assert.doesNotMatch(menu, /data-terminal-action="new-shell"/);
+  assert.match(menu, /data-terminal-action="remove-pane"/);
 });
 
 test('keeps the terminal instance and output subscription across workspace renders', async () => {
@@ -191,14 +217,46 @@ test('delivers Core approval notifications to the desktop review hook', async ()
   }
 });
 
+test('forwards session and attached-client frames to the observability hook', async () => {
+  const previous = globalThis.WebSocket;
+  class FakeWebSocket { static OPEN = 1; close() {} }
+  globalThis.WebSocket = FakeWebSocket;
+  try {
+    const frames = [];
+    const extensionFrames = [];
+    const controller = new TerminalController({ preview: false, async websocketURL() { return 'ws://example.test/api/ui/ws'; } }, {
+      sessions(message) { frames.push(message); },
+      extensions(message) { extensionFrames.push(message); },
+    });
+    await controller.connect();
+    controller.ws.onmessage({ data: JSON.stringify({
+      type: 'sessions',
+      sessions: [],
+      clients: [{ id: '1', self: true }],
+      mcp_clients: [{ session_id: 'm1', name: 'agent' }],
+      extensions: [{ name: 'docs', status: 'idle' }],
+    }) });
+    assert.equal(frames.length, 1);
+    assert.equal(extensionFrames.length, 1);
+    assert.equal(extensionFrames[0].extensions[0].name, 'docs');
+    assert.equal(frames[0].clients[0].self, true);
+    assert.equal(frames[0].mcp_clients[0].session_id, 'm1');
+    controller.dispose();
+  } finally {
+    globalThis.WebSocket = previous;
+  }
+});
+
 test('routes Core shell_activity frames into per-shell typing indicators', async () => {
   const previous = globalThis.WebSocket;
   class FakeWebSocket { static OPEN = 1; close() {} }
   globalThis.WebSocket = FakeWebSocket;
   try {
     const updates = [];
+    const coreEvents = [];
     const controller = new TerminalController({ preview: false, async websocketURL() { return 'ws://example.test/api/ui/ws'; } }, {
       activity(shellID, status) { updates.push([shellID, status]); },
+      activityEvent(message) { coreEvents.push(message); },
     });
     await controller.connect();
     const receive = frame => controller.ws.onmessage({ data: JSON.stringify(frame) });
@@ -212,6 +270,11 @@ test('routes Core shell_activity frames into per-shell typing indicators', async
       ['shell-2', 'ai'],
       ['shell-2', ''],
       ['shell-1', ''],
+    ]);
+    assert.deepEqual(coreEvents.map(event => [event.shell_id, event.src, event.submit]), [
+      ['shell-1', 'api', false],
+      ['shell-2', 'ai', false],
+      ['shell-2', 'ai', true],
     ]);
     controller.dispose();
   } finally {

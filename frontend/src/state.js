@@ -8,6 +8,12 @@ const persistedSidebarPinned = localStorage.getItem('termcp-desktop-sidebar-pinn
 
 export const state = {
   data: { core: { running: false, managed: false, address: 'http://127.0.0.1:18765', state: 'starting' }, connections: [], sessions: [], history: [], forwards: [] },
+  extensions: [],
+  extensionsLoading: false,
+  extensionError: '',
+  extensionImport: null,
+  extensionBusy: '',
+  extensionSessions: new Map(),
   loading: true,
   error: '',
   section: 'workspace',
@@ -42,6 +48,14 @@ export const state = {
   historyTintRows: localStorage.getItem('termcp-desktop-history-tint-rows') === '1',
   historyLoading: false,
   historyError: '',
+  historyFocus: null,
+  observability: {
+    loading: false,
+    error: '',
+    sessionID: '',
+    activity: [],
+    clients: { webui: [], mcp: [] },
+  },
   wsStatus: core.preview ? 'preview' : 'connecting',
   service: { supported: true, platform: '', installed: false, running: false, autostart: false, pid: 0, label: '', definition: '', log_path: '', executable: '', description: '' },
   systemFonts: { items: ['system-ui'], loading: false, loaded: false, error: '' },
@@ -55,10 +69,13 @@ export function shellCount() {
   return state.data.sessions.reduce((count, session) => count + (session.shells || []).filter(shell => shell.status === 'running').length, 0);
 }
 
-export function sessionByID(id) { return state.data.sessions.find(session => session.id === id); }
+export function sessionByID(id) {
+  return state.data.sessions.find(session => session.id === id)
+    || [...state.extensionSessions.values()].find(session => session.id === id);
+}
 
 export function shellByID(id) {
-  for (const session of state.data.sessions) {
+  for (const session of [...state.data.sessions, ...state.extensionSessions.values()]) {
     const shell = (session.shells || []).find(item => item.id === id);
     if (shell) return { ...shell, session };
   }

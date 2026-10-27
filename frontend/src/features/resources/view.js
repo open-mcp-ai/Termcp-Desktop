@@ -30,7 +30,7 @@ function shellNode(shell, session) {
   return `<button class="tree-row leaf ${state.selected.type === 'shell' && state.selected.id === shell.id ? 'selected' : ''}" data-open-shell="${esc(shell.id)}" data-shell-context="${esc(shell.id)}" data-session="${esc(session.id)}"><span class="terminal-glyph">›_</span><span><b>${esc(shell.name || 'shell')}</b><small>${esc(session.name)} · ${esc(shell.status)}${tags.length ? ` · #${esc(tags.join(' #'))}` : ''}</small></span></button>`;
 }
 
-const historyNode = item => `<button class="tree-row leaf ${state.selected.type === 'history' && state.selected.id === item.id ? 'selected' : ''}" data-select="history:${esc(item.id)}">${icon('history', 13)}<span><b>${esc(item.name)}</b><small>${esc(item.status || 'exited')} · ${(item.shells || []).length} shells${tagsFor('history', item.id).length ? ` · #${esc(tagsFor('history', item.id).join(' #'))}` : ''}</small></span></button>`;
+const historyNode = item => `<button class="tree-row leaf ${state.selected.type === 'history' && state.selected.id === item.id ? 'selected' : ''}" data-select="history:${esc(item.id)}">${icon('history', 13)}<span><b>${esc(item.name)}</b><small>${item.archived_shells_only ? 'Archived shell' : esc(item.status || 'exited')} · ${(item.shells || []).length} shells${tagsFor('history', item.id).length ? ` · #${esc(tagsFor('history', item.id).join(' #'))}` : ''}</small></span></button>`;
 
 function tagMatch(type, id) { return !state.tagFilter || tagsFor(type, id).includes(state.tagFilter); }
 function sessionTagMatch(item, type) { return tagMatch(type, item.id) || (item.shells || []).some(shell => tagMatch('shell', shell.id)); }
@@ -43,8 +43,9 @@ export function tree(query) {
   if (['sessions', 'workspace', 'resources'].includes(state.section)) {
     const sessions = state.data.sessions.filter(item => sessionTagMatch(item, 'session') && matches(`${item.name} ${item.ssh_endpoint || ''} ${item.id} ${tagsFor('session', item.id).join(' ')} ${(item.shells || []).flatMap(shell => tagsFor('shell', shell.id)).join(' ')}`, query));
     const connections = state.data.connections.filter(item => tagMatch('connection', item.name) && matches(`${item.name} ${item.host || ''} ${item.user || ''} ${tagsFor('connection', item.name).join(' ')}`, query));
-    const add = `<button class="tree-group-add icon-btn" data-action="new-connection" title="New host configuration" aria-label="New host configuration">${icon('plus', 14)}</button>`;
-    return group('Host configurations', connections.map(connectionNode).join(''), 'connection-list', add)
+    const canExport = state.data.connections.some(item => item.kind !== 'internal');
+    const actions = `<div class="tree-group-actions"><button class="icon-btn" data-action="import-connections" title="Import host configurations" aria-label="Import host configurations">${icon('download', 14)}</button><button class="icon-btn" data-action="export-connections" title="Export host configurations" aria-label="Export host configurations" ${canExport ? '' : 'disabled'}>${icon('upload', 14)}</button><button class="tree-group-add icon-btn" data-action="new-connection" title="New host configuration" aria-label="New host configuration">${icon('plus', 14)}</button></div>`;
+    return group('Host configurations', connections.map(connectionNode).join(''), 'connection-list', actions)
       + group('Session list', sessions.map(sessionNode).join(''), 'session-list');
   }
   if (state.section === 'settings') return '<div class="tree-empty">App, Core and API</div>';
@@ -53,7 +54,7 @@ export function tree(query) {
 }
 
 export function rail() {
-  const items = [['workspace', 'Connection', 'resources'], ['history', 'History', 'history']];
+  const items = [['workspace', 'Connection', 'resources'], ['extensions', 'Extensions', 'core'], ['history', 'History', 'history'], ['observability', 'Runtime', 'eye']];
   const item = ([key, label, glyph]) => `<button data-section="${key}" class="${state.section === key || (key === 'workspace' && ['sessions', 'resources'].includes(state.section)) ? 'active' : ''}" title="${label}" aria-label="${label}"><span>${icon(glyph, 19)}</span><small>${label}</small></button>`;
   return `<aside class="rail"><button class="rail-sidebar-toggle" data-sidebar-toggle title="${state.sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}" aria-label="${state.sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}" aria-expanded="${state.sidebarOpen}">${icon(state.sidebarOpen ? 'collapse' : 'expand', 17)}</button><nav aria-label="Main navigation">${items.map(item).join('')}</nav><div class="rail-bottom">${item(['settings', 'Settings', 'settings'])}</div></aside>`;
 }

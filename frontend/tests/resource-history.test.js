@@ -11,7 +11,7 @@ globalThis.window = {};
 
 const { commandLinePayload } = await import('../src/features/resources/command.js');
 const { tagsFor, setTags, knownTags } = await import('../src/features/resources/tags.js');
-const { connectionPage, historyPage } = await import('../src/features/resources/pages.js');
+const { connectionPage, historyPage, sessionPage, shellPage } = await import('../src/features/resources/pages.js');
 const { historyRowCells } = await import('../src/features/resources/history.js');
 const { state } = await import('../src/state.js');
 
@@ -46,6 +46,45 @@ test('history presents a continuous terminal with source colours instead of offs
   assert.match(html, /data-history-terminal="shell-repro"/);
   for (const kind of ['input', 'agent', 'output']) assert.match(html, new RegExp(`history-colour-${kind}`));
   assert.doesNotMatch(html, /history-timeline|Input events are markers only|class="transcript"/);
+});
+
+test('session and shell details show only end reasons returned by Core', () => {
+  const session = {
+    id: 'reason-session',
+    name: 'Reason session',
+    status: 'exited',
+    exit_reason: 'SSH connection lost: read tcp',
+    ssh_endpoint: 'remote',
+    shells: [{ id: 'reason-shell', name: 'shell', status: 'exited', mode: 'pty' }],
+  };
+  const sessionHTML = sessionPage(session);
+  assert.match(sessionHTML, /End reason/);
+  assert.match(sessionHTML, /SSH connection lost: read tcp/);
+  const shellHTML = shellPage({ ...session.shells[0], session });
+  assert.match(shellHTML, /Shell end reason/);
+  assert.match(shellHTML, /class="end-reason empty-fact"/);
+  assert.match(shellHTML, /Session end reason/);
+  assert.match(shellHTML, /SSH connection lost: read tcp/);
+});
+
+test('an archived child shell is read-only and cannot rename or delete its live parent', () => {
+  state.historyShellID = 'archived-child';
+  const item = {
+    id: 'live-parent',
+    name: 'Live parent',
+    status: 'running',
+    archived_shells_only: true,
+    ssh_endpoint: 'remote',
+    updated_at: Date.now(),
+    shells: [{ id: 'archived-child', name: 'finished', status: 'exited', mode: 'pty', archived: true }],
+  };
+  const html = historyPage(item);
+  assert.match(html, /ARCHIVED SHELL RECORD/);
+  assert.match(html, /Archived shell · parent session live/);
+  assert.match(html, /data-history-terminal="archived-child"/);
+  assert.doesNotMatch(html, /data-action="rename-session"/);
+  assert.doesNotMatch(html, /data-action="delete-history"/);
+  assert.doesNotMatch(html, /data-action="open-selected-shell"/);
 });
 
 test('row colours follow zero-length input marks and preserve the output cause across rows', () => {

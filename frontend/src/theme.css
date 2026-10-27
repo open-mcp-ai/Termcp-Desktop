@@ -237,11 +237,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .file-item { border-color: var(--line); }
 .file-item > button { color: var(--text); }
 .file-item > button:hover { background: var(--surface-3); }
-.file-item > button b, .forward-list b, .notification-list b { font-size: var(--font-small); }
-.file-item > button small, .forward-list small, .notification-list small, .inspector-foot { color: var(--muted); font-size: var(--font-tiny); }
-.file-item > button > span:first-child, .forward-list b, .notification-list b { color: var(--accent); }
-.file-item > div button:hover, .forward-list article > button:hover, .notification-list article > button:hover { background: var(--surface-3); color: var(--danger); }
-.forward-list article, .notification-list article, .inspector-foot { border-color: var(--line); }
+.file-item > button b, .forward-list b { font-size: var(--font-small); }
+.file-item > button small, .forward-list small, .inspector-foot { color: var(--muted); font-size: var(--font-tiny); }
+.file-item > button > span:first-child, .forward-list b { color: var(--accent); }
+.file-item > div button:hover, .forward-list article > button:hover { background: var(--surface-3); color: var(--danger); }
+.forward-list article, .inspector-foot { border-color: var(--line); }
 
 /* Bottom-right Core status: compact at rest, detailed on hover/focus. */
 .core-indicator { position: fixed; right: 14px; bottom: 12px; z-index: 16; }

@@ -132,11 +132,17 @@ for (const target of [
       await confirm.click();
       await page.waitForFunction(() => window.closeRequests.length > 0);
       assert.deepEqual(await page.evaluate(() => window.closeRequests), [
-        { method: 'DELETE', path: `/api/shells/${target.shellID}` },
+        { method: 'POST', path: `/api/shells/${target.shellID}/archive` },
       ]);
       await page.locator(`[data-session-context="${target.sessionID}"] .tree-row.sub`).click({ button: 'right' });
       assert.equal(await page.locator('.session-context-menu').count(), 1,
         'Session rows must retain their session context menu');
+      await page.click('[data-section="history"]');
+      await page.click(`[data-select="history:${target.sessionID}"]`);
+      await page.waitForSelector('.history-page .archive-badge');
+      assert.match(await page.locator('.history-page .archive-badge').innerText(), /Archived shell/);
+      assert.equal(await page.locator('[data-action="delete-history"]').count(), 0);
+      assert.equal(await page.locator('[data-action="rename-session"]').count(), 0);
     } finally {
       await context.close();
     }

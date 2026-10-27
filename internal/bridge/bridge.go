@@ -29,6 +29,7 @@ import (
 )
 
 const maxResponse = 64 << 20
+const connectionPasswordHeader = "X-Termcp-Password"
 
 var requestSequence atomic.Uint64
 
@@ -171,6 +172,9 @@ func (c *Client) API(input model.APIRequest) (result model.APIResponse, err erro
 		}
 		req.Header.Set("Content-Type", contentType)
 	}
+	if input.Password != "" {
+		req.Header.Set(connectionPasswordHeader, input.Password)
+	}
 	resp, requestErr := c.requestClient(method, apiPath).Do(req)
 	if requestErr != nil {
 		return model.APIResponse{}, fmt.Errorf("Core 请求失败: %w", requestErr)
@@ -191,7 +195,7 @@ func (c *Client) API(input model.APIRequest) (result model.APIResponse, err erro
 		Headers:     selectedHeaders(resp.Header),
 	}
 	mediaType, _, _ := mime.ParseMediaType(result.ContentType)
-	if strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" || mediaType == "" {
+	if strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" || mediaType == "application/toml" || strings.HasSuffix(mediaType, "+toml") || mediaType == "" {
 		result.Body = string(data)
 	} else if len(data) > 0 {
 		result.Base64 = base64.StdEncoding.EncodeToString(data)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net"
@@ -14,6 +15,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	guiConfig "github.com/open-mcp-ai/termcp/gui/internal/config"
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
 	"github.com/open-mcp-ai/termcp/gui/internal/model"
@@ -34,6 +38,31 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = service.Stop() })
 	app := newApp(service)
+	mcpClient, err := client.NewStreamableHttpClient("http://127.0.0.1:"+strconv.Itoa(port)+"/stream", transport.WithContinuousListening())
+	if err != nil {
+		t.Fatalf("create MCP client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	if err := mcpClient.Start(ctx); err != nil {
+		t.Fatalf("start MCP client: %v", err)
+	}
+	initRequest := mcpgo.InitializeRequest{}
+	initRequest.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
+	initRequest.Params.ClientInfo = mcpgo.Implementation{Name: "desktop-e2e", Version: "1"}
+	if _, err := mcpClient.Initialize(ctx, initRequest); err != nil {
+		t.Fatalf("initialize MCP client: %v", err)
+	}
+	tools, err := mcpClient.ListTools(ctx, mcpgo.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("list MCP tools: %v", err)
+	}
+	if len(tools.Tools) != 1 || tools.Tools[0].Name != "term" {
+		t.Fatalf("MCP tools = %+v, want only term", tools.Tools)
+	}
+	if err := mcpClient.Close(); err != nil {
+		t.Fatalf("close MCP client: %v", err)
+	}
 	var version struct {
 		Version string `json:"version"`
 	}
@@ -52,6 +81,10 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	}
 	if snapshot, err := app.GetSnapshot(); err != nil || snapshot.Core.Version != version.Version {
 		t.Fatalf("snapshot Core version = %q, error = %v", snapshot.Core.Version, err)
+	}
+	termGuide := assertAPIStatus(t, app, "POST", "/api/term", map[string]any{"cmd": ""}, http.StatusOK)
+	if strings.TrimSpace(termGuide.Body) == "" {
+		t.Fatal("POST /api/term returned an empty command guide")
 	}
 
 	assertAPIStatus(t, app, "GET", "/api/connections", nil, http.StatusOK)
@@ -125,6 +158,20 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 			t.Fatalf("shell activity event %d = %+v, want shell=%q src=api submit=%t", index, event, session.ShellID, submit)
 		}
 	}
+	activity, err := app.GetActivity(session.SessionID, 200)
+	if err != nil {
+		t.Fatalf("read observability activity: %v", err)
+	}
+	if len(activity) == 0 || activity[0].ShellID != session.ShellID {
+		t.Fatalf("observability activity = %+v", activity)
+	}
+	clients, err := app.GetClients()
+	if err != nil {
+		t.Fatalf("read observability clients: %v", err)
+	}
+	if len(clients.WebUI) == 0 {
+		t.Fatal("Core did not report the attached desktop WebSocket as a client")
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		output := assertAPIStatus(t, app, "GET", "/api/shells/"+url.PathEscape(session.ShellID)+"/output-range?tail=1&max=4096", nil, http.StatusOK)
@@ -177,12 +224,14 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 		t.Fatalf("forward missing from snapshot: %+v, %v", withForward.Forwards, err)
 	}
 	assertAPIStatus(t, app, "DELETE", "/api/forwards/"+url.PathEscape(forwardInfo.ID), nil, http.StatusOK)
-	assertAPIStatus(t, app, "GET", "/api/notifications?session_id="+url.QueryEscape(session.SessionID), nil, http.StatusOK)
 
 	assertAPIStatus(t, app, "POST", "/api/sessions/"+url.PathEscape(session.SessionID)+"/terminate", nil, http.StatusNoContent)
 	snapshot, err := app.GetSnapshot()
 	if err != nil || len(snapshot.History) != 1 || snapshot.History[0].ID != session.SessionID {
 		t.Fatalf("terminated session missing from history: %+v, %v", snapshot.History, err)
+	}
+	if !strings.Contains(strings.ToLower(snapshot.History[0].ExitReason), "closed") {
+		t.Fatalf("terminated session has no preserved exit reason: %q", snapshot.History[0].ExitReason)
 	}
 	spans, err := app.GetConversationIndex(session.SessionID, session.ShellID)
 	if err != nil || len(spans) == 0 {

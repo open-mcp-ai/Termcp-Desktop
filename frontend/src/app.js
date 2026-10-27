@@ -2,8 +2,11 @@ import './styles.css';
 import './theme.css';
 import './features/workspace/workspace.css';
 import './features/resources/resources.css';
+import './features/connections/transfer.css';
 import './features/approval/approval.css';
 import './features/integrations/integrations.css';
+import './features/observability/observability.css';
+import './features/extensions/extensions.css';
 import './ui/feedback.css';
 import { core } from './core.js';
 import { setAppearance } from './appearance.js';
@@ -25,6 +28,11 @@ import { approvalMenu, approvalPage, approvalPrompt, pendingApprovals } from './
 import { approvalSettings, effectiveApproval, moveConnectionPolicy, policyFor, rememberPolicies, removeConnectionPolicy, setConnectionPolicy, setDesktopNotifications, setGlobalApproval, withDefaultApproval } from './features/approval/policy.js';
 import { settingsPage } from './features/settings/view.js';
 import { integrationPage } from './features/integrations/view.js';
+import { ObservabilityController } from './features/observability/controller.js';
+import { observabilityPage } from './features/observability/view.js';
+import { ExtensionController, readExtensionImport } from './features/extensions/controller.js';
+import { extensionPayload, formFromExtensionDetail, formValues, importFailureReport, importReport, isExtensionNamespace, userSessions } from './features/extensions/model.js';
+import { extensionEditorOpen, extensionsPage } from './features/extensions/view.js';
 import { inspectorBody, inspectorShell } from './features/inspector/view.js';
 import { activateInspectorShell, followShellDirectory, performFileUpload, rememberInspectorPath } from './features/inspector/controller.js';
 import { modal } from './features/modal.js';
@@ -39,6 +47,7 @@ if (!core.preview && /Macintosh|Mac OS X/.test(navigator.userAgent)) {
 let refreshTimer;
 let connectionClickTimer;
 let inspectorRequest = 0;
+let extensionSequence = 0;
 const historyTerminal = new HistoryTerminalController(core, ({ loading, error }) => {
   state.historyLoading = loading;
   state.historyError = error;
@@ -55,13 +64,17 @@ const sessionCreation = new SessionCreationCoordinator({
 });
 const terminals = new TerminalController(core, {
   status(status) { state.wsStatus = status; updateConnectionBadge(); },
-  sessions(message) { sessionCreation.observe(message); clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh({ quiet: true }), 180); },
+  sessions(message) { observability.applySessionFrame(message); sessionCreation.observe(message); clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh({ quiet: true }), 180); },
+  extensions(message) { if (Array.isArray(message.extensions)) { extensionSequence += 1; state.extensions = message.extensions; state.extensionsLoading = false; state.extensionError = ''; pruneExtensionSessions(); if (state.section === 'extensions') render(); } },
+  activityEvent() { observability.activityEvent(); },
   notify(message) { toast(message.message || message.text || 'Core notification'); },
   approval(message) { handleApprovalEvent(message); },
   log(level, message, details) { core.log(level, message, details); },
   cwd(shellID, directory) { handleShellDirectory(shellID, directory); },
   activity(shellID, status) { updateShellActivity(shellID, status); },
 });
+const observability = new ObservabilityController(core, state, { render: () => render() });
+const extensionAPI = new ExtensionController((...args) => core.api(...args));
 
 window.addEventListener('error', event => {
   core.log('error', 'Unhandled frontend error', `${event.message || 'Unknown error'}${event.filename ? ` · ${event.filename}:${event.lineno || 0}` : ''}`);
@@ -73,8 +86,14 @@ window.addEventListener('unhandledrejection', event => {
 async function refresh({ quiet = false } = {}) {
   if (!quiet) { state.loading = true; state.error = ''; render(); }
   try {
+    const extensionRead = extensionSequence;
     const [snapshot, service] = await Promise.all([core.snapshot(), core.serviceStatus()]);
-    state.data = { ...snapshot, preview: core.preview, connections: snapshot.connections || [], sessions: snapshot.sessions || [], history: snapshot.history || [], forwards: snapshot.forwards || [] };
+    state.data = { ...snapshot, preview: core.preview, connections: snapshot.connections || [], sessions: userSessions(snapshot.sessions), history: userSessions(snapshot.history), forwards: snapshot.forwards || [] };
+    if (extensionRead === extensionSequence) {
+      state.extensions = Array.isArray(snapshot.extensions) ? snapshot.extensions : [];
+      state.extensionError = snapshot.extension_error || '';
+      pruneExtensionSessions();
+    }
     rememberPolicies(state.data.connections);
     await syncApprovalProfiles(state.data.connections);
     await loadApprovals();
@@ -113,8 +132,54 @@ async function loadApprovals() {
   state.approvals = result.data?.approvals || [];
 }
 
+async function loadExtensions({ render: shouldRender = true } = {}) {
+  const request = ++extensionSequence;
+  if (!state.data.core.running) {
+    state.extensions = [];
+    state.extensionsLoading = false;
+    state.extensionError = '';
+    if (shouldRender) render();
+    return [];
+  }
+  state.extensionsLoading = true;
+  if (shouldRender) render();
+  try {
+    const items = await extensionAPI.list();
+    if (request !== extensionSequence) return state.extensions;
+    state.extensions = items;
+    state.extensionError = '';
+  } catch (error) {
+    if (request !== extensionSequence) return state.extensions;
+    state.extensions = [];
+    state.extensionError = String(error);
+    core.log('warn', 'Extension templates could not be read', String(error));
+  } finally {
+    if (request === extensionSequence) {
+      state.extensionsLoading = false;
+      pruneExtensionSessions();
+      if (shouldRender) render();
+    }
+  }
+  return state.extensions;
+}
+
+function pruneExtensionSessions() {
+  const available = new Map(state.extensions.map(extension => [extension.name, extension]));
+  let changed = false;
+  for (const [name, session] of state.extensionSessions) {
+    const extension = available.get(name);
+    const handle = extension?.status === 'available' ? extension.shell_id : '';
+    if (!handle || session.id !== extension.session_id || !(session.shells || []).some(shell => shell.id === handle)) {
+      state.extensionSessions.delete(name);
+      changed = true;
+    }
+  }
+  if (changed) reconcileWorkspaces();
+}
+
 async function handleApprovalEvent(message) {
   try { await loadApprovals(); } catch (error) { core.log('warn', 'Approval list refresh failed', String(error)); }
+  observability.activityEvent();
   const request = message.request || {};
   if (request.state === 'pending') {
     state.approvalPromptID = request.id || '';
@@ -136,13 +201,15 @@ function selectedResource() {
   if (type === 'connection') return connectionByName(id);
   if (type === 'session') return sessionByID(id);
   if (type === 'shell') return shellByID(id);
-  if (type === 'history') return historyByID(id);
+  if (type === 'history') return historyByID(id) || sessionByID(id);
   return state.data.core;
 }
 
 function content() {
   if (state.section === 'workspace') return workspacePage();
   if (state.section === 'approvals') return approvalPage();
+  if (state.section === 'observability') return observabilityPage(state);
+  if (state.section === 'extensions') return extensionsPage();
   if (state.section === 'settings') return settingsPage();
   if (state.section === 'integrations') return integrationPage();
   if (state.section === 'history' && state.selected.type !== 'history') return historyIndexPage();
@@ -199,7 +266,7 @@ function render() {
   historyTerminal.detach();
   const previousTabScrollLeft = document.querySelector('.workspace-tab-scroll')?.scrollLeft || 0;
   terminals.detachAll();
-  const fullWidth = state.section === 'settings' || state.section === 'approvals' || state.section === 'integrations';
+  const fullWidth = state.section === 'settings' || state.section === 'approvals' || state.section === 'integrations' || state.section === 'observability' || state.section === 'extensions';
   const pending = pendingApprovals().length;
   document.querySelector('#app').innerHTML = `<a class="skip-link" href="#main-content">Skip to main content</a><div class="app-shell"><header class="titlebar" style="--wails-draggable:drag"><div class="title-brand"><span>T_</span><b>Termcp</b></div><div class="title-approvals" style="--wails-draggable:no-drag"><button class="title-approval-button ${state.approvalMenuOpen ? 'active' : ''}" data-toggle-approval-menu aria-label="Approval notifications${pending ? ` (${pending} pending)` : ''}" aria-expanded="${state.approvalMenuOpen}" title="Approval notifications">${icon('bell', 18)}${pending ? `<em class="approval-badge">${pending}</em>` : ''}</button>${approvalMenu()}</div><div class="title-api-wrap" data-i18n-ignore style="--wails-draggable:no-drag"><button class="title-api-button ${state.section === 'integrations' ? 'active' : ''}" data-action="open-integrations" aria-label="API / MCP / SKILLS" aria-describedby="title-api-tooltip">${icon('book', 18)}</button><span class="title-api-tooltip" id="title-api-tooltip" role="tooltip">API / MCP / SKILLS</span></div><div class="window-controls" style="--wails-draggable:no-drag"><button data-window="min" aria-label="Minimise">—</button><button data-window="max" aria-label="Maximise window">□</button><button data-window="close" aria-label="Hide to system tray">×</button></div></header><div class="body ${fullWidth ? 'single-content' : ''} ${state.section === 'workspace' ? 'workspace-body' : ''} ${state.sidebarOpen ? '' : 'sidebar-collapsed'} ${state.sidebarPinned ? '' : 'sidebar-unpinned'}">${rail()}${fullWidth ? '' : explorer()}<main id="main-content" data-history-view="${esc(historyView)}" class="content ${historyView ? 'history-content' : ''} ${state.section === 'workspace' ? 'workspace-content' : ''} ${fullWidth ? 'settings-content' : ''}">${state.error ? `<div class="error-banner">${esc(state.error)}<button data-action="refresh">Retry</button></div>` : ''}${content()}</main></div></div>${approvalPrompt()}${coreIndicator()}${sessionContextMenu()}${terminalContextMenu()}${renderShellModeMenu(state)}${modal()}`;
   localizeDOM(document.querySelector('#app'));
@@ -210,9 +277,9 @@ function render() {
     if (lastRenderedWorkspaceID !== state.activeWorkspace) showActiveTab();
     lastRenderedWorkspaceID = state.activeWorkspace;
   }
-  historyTerminal.mount(document.querySelector('[data-history-terminal]'), state.historyShellID, state.historyTintRows);
+  historyTerminal.mount(document.querySelector('[data-history-terminal]'), state.historyShellID, state.historyTintRows, state.historyFocus);
   if (state.section === 'workspace') mountWorkspace();
-  const liveShells = new Set(state.data.sessions.flatMap(session => (session.shells || []).map(shell => shell.id)));
+  const liveShells = new Set([...state.data.sessions, ...state.extensionSessions.values()].flatMap(session => (session.shells || []).map(shell => shell.id)));
   terminals.retain(liveShells);
   terminals.refreshAppearance();
   if (state.section === 'settings') {
@@ -302,9 +369,6 @@ async function loadInspector({ force = true } = {}) {
       inspectorData = result.data;
     } else if (state.inspector.tab === 'forwards') {
       const result = await core.api('GET', `/api/sessions/${encode(shell.session.id)}/forwards`);
-      inspectorData = result.data;
-    } else {
-      const result = await core.api('GET', `/api/notifications?session_id=${encode(shell.session.id)}`);
       inspectorData = result.data;
     }
   } catch (error) { inspectorError = String(error); }
@@ -438,7 +502,7 @@ async function loadSystemFonts() {
 }
 
 function navigateToSection(section) {
-  const allowed = new Set(['resources', 'workspace', 'sessions', 'approvals', 'history', 'core', 'settings']);
+  const allowed = new Set(['resources', 'workspace', 'sessions', 'approvals', 'history', 'observability', 'extensions', 'core', 'settings']);
   if (!allowed.has(section)) return;
   if (section === 'core') section = 'settings';
   state.section = section;
@@ -450,6 +514,8 @@ function navigateToSection(section) {
   if (section === 'settings') { state.selected = { type: 'settings', id: '' }; state.settingsView = 'overview'; }
   if (section === 'approvals') state.selected = { type: 'approvals', id: '' };
   render();
+  if (section === 'observability') observability.load();
+  if (section === 'extensions') loadExtensions();
 }
 
 function toast(message, tone = 'info') {
@@ -494,6 +560,170 @@ async function openConnectionEditor(name = '') {
   if (!state.dialog || state.dialog.type !== 'connection') return;
   state.dialog.loading = false;
   render();
+}
+
+async function exportHostConfigurations(names, password) {
+  if (!names.length) {
+    toast('Select at least one remote host configuration', 'warning');
+    return;
+  }
+  try {
+    const result = await core.exportConnections(names, password);
+    if (result?.cancelled) return;
+    const count = Number(result?.count || names.length);
+    state.dialog = null;
+    render();
+    toast(`${count} host configuration${count === 1 ? '' : 's'} exported`, 'success');
+  } catch (error) {
+    if (state.dialog?.type === 'export-connections') {
+      state.dialog.error = String(error);
+      render();
+    }
+    toast(String(error), 'error');
+  }
+}
+
+async function importHostConfigurations(password) {
+  try {
+    const result = await core.importConnections(password);
+    if (result?.cancelled) return;
+    state.dialog = { type: 'import-result', result };
+    await refresh({ quiet: true });
+    const imported = Number(result?.imported || 0);
+    const failed = Number(result?.failed || 0);
+    toast(`Host import: ${imported} imported${failed ? `, ${failed} failed` : ''}`, failed ? 'warning' : 'success');
+  } catch (error) {
+    if (state.dialog?.type === 'import-connections') {
+      state.dialog.error = String(error);
+      render();
+    }
+    toast(String(error), 'error');
+  }
+}
+
+function captureExtensionEditor(form, dialog = state.dialog) {
+  if (!dialog || dialog.type !== 'extension' || !form) return;
+  if (dialog.mode === 'toml') {
+    dialog.toml = String(new FormData(form).get('toml') || '');
+    return;
+  }
+  const values = formValues(form);
+  dialog.form = {
+    name: values.name,
+    kind: values.kind,
+    target: values.target,
+    description: values.description,
+    enabled: values.enabled,
+    mode: values.mode,
+    command: values.command,
+    args: values.args,
+    url: values.url,
+    headers: values.headers,
+    allow: values.allow,
+    paths: values.paths,
+    idleTimeout: values.idleTimeout,
+    notes: values.notes,
+    forwards: values.forwards,
+  };
+}
+
+async function openExtensionEditor(name = '') {
+  state.dialog = extensionEditorOpen(name);
+  render();
+  if (!name) return;
+  try {
+    const { detail, toml } = await extensionAPI.editor(name);
+    if (!state.dialog || state.dialog.type !== 'extension' || state.dialog.original !== name) return;
+    state.dialog.form = formFromExtensionDetail(detail, toml);
+    state.dialog.toml = toml;
+    state.dialog.status = detail.extension || state.extensions.find(item => item.name === name) || null;
+    state.dialog.failures = Array.isArray(detail.failures) ? detail.failures : [];
+  } catch (error) {
+    if (state.dialog?.type === 'extension' && state.dialog.original === name) state.dialog.result = String(error);
+  }
+  if (!state.dialog || state.dialog.type !== 'extension' || state.dialog.original !== name) return;
+  state.dialog.loading = false;
+  render();
+}
+
+async function importExtensionFile(file, input) {
+  try {
+    const loaded = await readExtensionImport(file);
+    if (loaded.cancelled) return;
+    const result = await extensionAPI.importDocument(loaded.document);
+    const rows = importReport(loaded.document, result);
+    const renamed = Array.isArray(result.renamed) ? result.renamed.length : 0;
+    state.extensionImport = {
+      title: `${Number(result.imported || rows.filter(row => row.status === 'created').length)} imported${renamed ? ` · ${renamed} renamed` : ''}`,
+      rows,
+    };
+    await loadExtensions({ render: false });
+    toast('Extension templates imported', 'success');
+  } catch (error) {
+    state.extensionImport = {
+      title: 'Import rejected · no templates were written',
+      rows: importFailureReport(error),
+    };
+    toast(String(error), 'error');
+    core.log('error', 'Extension import failed', String(error));
+  } finally {
+    if (input) input.value = '';
+    render();
+  }
+}
+
+async function exportExtensions() {
+  try {
+    const destination = await core.save('/api/extensions/batch', 'termcp-extensions.toml');
+    if (destination) toast('Extension templates exported', 'success');
+  } catch (error) {
+    toast(String(error), 'error');
+  }
+}
+
+async function retryExtension(name) {
+  if (!name || state.extensionBusy) return;
+  state.extensionBusy = name;
+  render();
+  let retryError = null;
+  try {
+    await extensionAPI.retry(name);
+    toast('Retry requested', 'success');
+  } catch (error) {
+    retryError = error;
+    toast(String(error), 'error');
+  } finally {
+    state.extensionBusy = '';
+    await loadExtensions({ render: false });
+    render();
+  }
+  const current = state.extensions.find(extension => extension.name === name);
+  if (current?.status === 'unavailable') await openExtensionEditor(name);
+  else if (retryError) await openExtensionEditor(name);
+}
+
+async function openExtensionTerminal(name, sessionID, shellID) {
+  if (!sessionID || !shellID) return;
+  try {
+    const [sessionResult, shellsResult] = await Promise.all([
+      core.api('GET', `/api/sessions/${encode(sessionID)}`),
+      core.api('GET', `/api/sessions/${encode(sessionID)}/shells`),
+    ]);
+    const shells = Array.isArray(shellsResult.data?.shells) ? shellsResult.data.shells : [];
+    const provided = shells.find(shell => shell.id === shellID);
+    const session = {
+      ...(sessionResult.data || {}),
+      id: sessionID,
+      name: `Extension · ${name}`,
+      status: 'running',
+      namespace: 'ext',
+      shells: provided ? shells : [...shells, { id: shellID, name: name, status: 'running', mode: 'pty' }],
+    };
+    state.extensionSessions.set(name, session);
+    openShell(shellID, sessionID);
+  } catch (error) {
+    toast(String(error), 'error');
+  }
 }
 
 async function testConnection(raw, label = true) {
@@ -544,7 +774,7 @@ document.addEventListener('click', async event => {
     } catch {
       toast(action === 'copy' ? 'Copy failed' : 'Clipboard is unavailable', 'error');
     }
-    if (action === 'new-shell') await createShell(item.session.id);
+    if (action === 'new-shell' && !isExtensionNamespace(item.session.namespace)) await createShell(item.session.id);
     if (action === 'remove-pane') {
       const workspace = activeWorkspace();
       workspace.panes = workspace.panes.filter(pane => pane.shellID !== shellID);
@@ -552,7 +782,7 @@ document.addEventListener('click', async event => {
       workspace.activeShell = workspace.panes[0]?.shellID || '';
       saveWorkspaces(); render();
     }
-    if (action === 'close') confirmDialog('Close shell', 'This shell process will end. Other shells and the SSH connection keep running.', 'close-shell', shellID, 'Close shell');
+    if (action === 'close' && !isExtensionNamespace(item.session.namespace)) confirmDialog('Close shell', 'This shell process will end and its output will remain in history. Other shells and the SSH connection keep running.', 'close-shell', shellID, 'Close shell');
     return;
   }
   const contextAction = event.target.closest('[data-context-action]');
@@ -646,7 +876,11 @@ document.addEventListener('click', async event => {
   }
   if (target.dataset.toggleApprovalMenu !== undefined) { state.approvalMenuOpen = !state.approvalMenuOpen; state.approvalPromptID = ''; render(); return; }
   if (target.dataset.dismissApprovalPrompt !== undefined) { state.approvalPromptID = ''; render(); return; }
-  if (target.dataset.closeShellTab) { confirmDialog('Close shell', 'This shell process will end. Other shells and the SSH connection keep running.', 'close-shell', target.dataset.closeShellTab, 'Close shell'); return; }
+  if (target.dataset.closeShellTab) {
+    const item = shellByID(target.dataset.closeShellTab);
+    if (item && !isExtensionNamespace(item.session.namespace)) confirmDialog('Close shell', 'This shell process will end and its output will remain in history. Other shells and the SSH connection keep running.', 'close-shell', target.dataset.closeShellTab, 'Close shell');
+    return;
+  }
   if (target.dataset.shellTab) {
     const workspace = activeWorkspace();
     selectShellTab(workspace, target.dataset.shellTab, target.dataset.session);
@@ -660,6 +894,12 @@ document.addEventListener('click', async event => {
     return;
   }
   if (target.dataset.authMode) { setConnectionAuthMode(target.closest('form'), target.dataset.authScope, target.dataset.authMode); return; }
+  if (target.dataset.extensionEditorView) {
+    captureExtensionEditor(target.closest('form'));
+    if (state.dialog?.type === 'extension') state.dialog.mode = target.dataset.extensionEditorView;
+    render();
+    return;
+  }
   if (target.dataset.toggleSecret !== undefined) {
     const input = target.closest('.secret-input')?.querySelector('input');
     if (input) { const visible = input.type === 'text'; input.type = visible ? 'password' : 'text'; target.classList.toggle('active', !visible); target.setAttribute('aria-label', visible ? 'Show password' : 'Hide password'); target.title = visible ? 'Show password' : 'Hide password'; }
@@ -685,6 +925,7 @@ document.addEventListener('click', async event => {
     return;
   }
   if (target.dataset.historyShell) { await loadHistoryIndex(state.selected.id, target.dataset.historyShell); return; }
+  if (target.dataset.activityOpen !== undefined) { openActivityHistory(target.dataset.session, target.dataset.shell, target.dataset.byte); return; }
   if (target.dataset.openSession) { openSession(target.dataset.openSession); return; }
   if (target.dataset.openShell) { openShell(target.dataset.openShell, target.dataset.session); return; }
   if (target.dataset.workspace) { state.activeWorkspace = target.dataset.workspace; state.section = 'workspace'; saveWorkspaces(); render(); return; }
@@ -712,7 +953,6 @@ document.addEventListener('click', async event => {
     return;
   }
   if (target.dataset.forwardDelete) { await run('Forward closed', () => core.api('DELETE', `/api/forwards/${encode(target.dataset.forwardDelete)}`), { refresh: false }); await loadInspector(); return; }
-  if (target.dataset.notificationDelete) { await run('Notification rule removed', () => core.api('DELETE', `/api/notifications/${encode(target.dataset.notificationDelete)}`), { refresh: false }); await loadInspector(); return; }
   if (target.dataset.approvalDecision) {
     const decision = target.dataset.approvalDecision;
     target.disabled = true;
@@ -727,9 +967,21 @@ document.addEventListener('click', async event => {
   if (!action) return;
   if (action === 'open-integrations') { if (state.section !== 'integrations') state.integrationReturnSection = state.section; state.section = 'integrations'; state.approvalMenuOpen = false; render(); return; }
   if (action === 'close-integrations') { state.section = state.integrationReturnSection || 'workspace'; render(); return; }
+  if (action === 'refresh-observability') { await observability.load(); return; }
+  if (action === 'refresh-extensions') { await loadExtensions(); return; }
+  if (action === 'new-extension') { await openExtensionEditor(); return; }
+  if (action === 'edit-extension') { await openExtensionEditor(target.dataset.name); return; }
+  if (action === 'delete-extension') { confirmDialog('Delete extension template', `Delete ${target.dataset.name}? Running instances for this template will close.`, 'delete-extension', target.dataset.name, 'Delete template'); return; }
+  if (action === 'retry-extension') { await retryExtension(target.dataset.name); return; }
+  if (action === 'open-extension') { await openExtensionTerminal(target.dataset.name, target.dataset.session, target.dataset.shell); return; }
+  if (action === 'import-extensions') { document.querySelector('[data-extension-import-file]')?.click(); return; }
+  if (action === 'export-extensions') { await exportExtensions(); return; }
+  if (action === 'dismiss-extension-import') { state.extensionImport = null; render(); return; }
   if (action === 'open-service-details') { state.section = 'settings'; state.settingsView = 'service'; state.selected = { type: 'settings', id: '' }; render(); return; }
   if (action === 'settings-overview') { state.settingsView = 'overview'; render(); return; }
   if (action === 'refresh') { await refresh(); return; }
+  if (action === 'export-connections') { state.dialog = { type: 'export-connections', error: '' }; render(); return; }
+  if (action === 'import-connections') { state.dialog = { type: 'import-connections', error: '' }; render(); return; }
   if (action === 'refresh-approvals') { await run('', loadApprovals, { refresh: false, render: true }); return; }
   if (action === 'open-host-configs') { state.sidebarOpen = true; state.collapsedGroups.delete('connection-list'); saveCollapsedGroups(); render(); document.querySelector('[data-group-toggle="connection-list"]')?.scrollIntoView({ block: 'nearest' }); return; }
   if (action === 'install-service') { await run('System service registered and started', () => core.installService(false)); return; }
@@ -755,7 +1007,11 @@ document.addEventListener('click', async event => {
   if (action === 'purge-session') { confirmDialog('Delete session permanently', 'The session, messages and history will be permanently deleted.', 'purge-session', target.dataset.id, 'Delete permanently'); return; }
   if (action === 'rename-session') { const item = sessionByID(target.dataset.id) || historyByID(target.dataset.id); if (!item) return; state.dialog = { type: 'rename', title: 'Rename session', target: 'session', id: item.id, value: item.name }; render(); return; }
   if (action === 'open-selected-shell') { openShell(target.dataset.shell, target.dataset.session); return; }
-  if (action === 'close-shell') { confirmDialog('Close shell', 'This shell process will end. Other shells and the SSH connection keep running.', 'close-shell', target.dataset.shell, 'Close shell'); return; }
+  if (action === 'close-shell') {
+    const item = shellByID(target.dataset.shell);
+    if (item && !isExtensionNamespace(item.session.namespace)) confirmDialog('Close shell', 'This shell process will end and its output will remain in history. Other shells and the SSH connection keep running.', 'close-shell', target.dataset.shell, 'Close shell');
+    return;
+  }
   if (action === 'add-pane') { state.dialog = { type: 'add-pane', direction: 'right' }; render(); return; }
   if (action === 'new-directory') { state.dialog = { type: 'directory' }; render(); return; }
   if (action === 'new-forward') { state.dialog = { type: 'forward', session: state.inspector.sessionID }; render(); return; }
@@ -823,6 +1079,12 @@ document.addEventListener('input', event => {
 
 document.addEventListener('change', async event => {
   if (event.target.matches('[data-tag-filter]')) { state.tagFilter = event.target.value; render(); return; }
+  if (event.target.matches('[data-activity-session]')) { await observability.selectSession(event.target.value); return; }
+  if (event.target.matches('[data-extension-import-file]')) { await importExtensionFile(event.target.files?.[0], event.target); return; }
+  if (event.target.matches('[data-select-all-connections]')) {
+    for (const checkbox of event.target.closest('form')?.querySelectorAll('input[name="connections"]') || []) checkbox.checked = event.target.checked;
+    return;
+  }
   if (event.target.matches('[data-global-approval]')) {
     const previous = approvalSettings.defaultEnabled;
     setGlobalApproval(event.target.value === 'on');
@@ -1030,6 +1292,47 @@ document.addEventListener('submit', async event => {
     if (saved && original) moveTags('connection', original, name);
     return;
   }
+  if (type === 'export-connections') {
+    const names = data.getAll('connections').map(String);
+    const password = String(data.get('password') || '');
+    await exportHostConfigurations(names, password);
+    return;
+  }
+  if (type === 'import-connections') {
+    await importHostConfigurations(String(data.get('password') || ''));
+    return;
+  }
+  if (type === 'extension') {
+    const dialog = state.dialog;
+    if (!dialog || dialog.type !== 'extension') return;
+    captureExtensionEditor(form, dialog);
+    dialog.saving = true;
+    dialog.result = '';
+    render();
+    try {
+      const original = dialog.original;
+      const name = String(dialog.form.name || '').trim();
+      if (!name) throw new Error('Name is required');
+      if (dialog.mode === 'toml') {
+        if (!String(dialog.toml || '').trim()) throw new Error('TOML document is empty');
+        await extensionAPI.saveTOML(original, name, dialog.toml);
+      } else {
+        const payload = extensionPayload(dialog.form, { create: !original });
+        await extensionAPI.saveForm(original, name, payload);
+      }
+      state.dialog = null;
+      await loadExtensions({ render: false });
+      render();
+      toast(original ? 'Extension template saved' : 'Extension template created', 'success');
+    } catch (error) {
+      if (state.dialog?.type === 'extension') {
+        state.dialog.saving = false;
+        state.dialog.result = String(error);
+      }
+      render();
+    }
+    return;
+  }
   if (type === 'forward') {
     state.dialog = null;
     const payload = { direction: data.get('direction'), local_host: data.get('local_host'), local_port: Number(data.get('local_port') || 0), remote_host: data.get('remote_host'), remote_port: Number(data.get('remote_port') || 0) };
@@ -1050,6 +1353,17 @@ document.addEventListener('submit', async event => {
 async function executeConfirmed(action, payload) {
   if (action === 'uninstall-service') await run('System service uninstalled; Core is running in the app', () => core.uninstallService());
   if (action === 'delete-connection') { const result = await run('Connection deleted', () => core.api('DELETE', `/api/connections/${encode(payload)}`)); if (result) { setTags('connection', payload, ''); removeConnectionPolicy(payload); } }
+  if (action === 'delete-extension') {
+    try {
+      await extensionAPI.remove(payload);
+      state.extensionSessions.delete(payload);
+      await loadExtensions({ render: false });
+      toast('Extension template deleted', 'success');
+    } catch (error) {
+      toast(String(error), 'error');
+    }
+    render();
+  }
   if (action === 'terminate-session') await run('Session terminated and archived', () => core.api('POST', `/api/sessions/${encode(payload)}/terminate`));
   if (action === 'purge-session') {
     const shells = sessionByID(payload)?.shells || [];
@@ -1062,10 +1376,11 @@ async function executeConfirmed(action, payload) {
     if (result) { setTags('history', payload, ''); shells.forEach(shell => setTags('shell', shell.id, '')); state.selected = { type: 'history-index', id: '' }; render(); }
   }
   if (action === 'close-shell') {
-    const result = await run('Shell closed', () => core.api('DELETE', `/api/shells/${encode(payload)}`));
-    if (result) setTags('shell', payload, '');
+    const result = await run('Shell archived', async () => { await core.archiveShell(payload); return true; });
+    if (!result) return;
     for (const workspace of state.workspaces) removeShellFromWorkspace(workspace, payload);
-    saveWorkspaces(); render();
+    saveWorkspaces();
+    await refresh({ quiet: true });
   }
   if (action === 'delete-file') { await run('File deleted', () => core.api('DELETE', `/api/sessions/${encode(state.inspector.sessionID)}/files?path=${encode(payload)}`), { refresh: false }); await loadInspector(); }
 }
@@ -1079,9 +1394,22 @@ async function searchHistory() {
   render();
 }
 
+function openActivityHistory(sessionID, shellID, byte) {
+  const item = historyByID(sessionID) || sessionByID(sessionID);
+  if (!item) return;
+  state.section = 'history';
+  state.selected = { type: 'history', id: sessionID };
+  state.historyShellID = shellID || item.shells?.[0]?.id || '';
+  state.historyFocus = { shellID: state.historyShellID, byte: Number(byte || 0), nonce: Date.now() };
+  state.historyLoading = Boolean(state.historyShellID);
+  state.historyError = '';
+  render();
+}
+
 async function loadHistoryIndex(sessionID, shellID = '') {
-  const item = historyByID(sessionID);
+  const item = historyByID(sessionID) || sessionByID(sessionID);
   state.historyShellID = shellID || item?.shells?.[0]?.id || '';
+  state.historyFocus = null;
   state.historyLoading = Boolean(state.historyShellID);
   state.historyError = '';
   render();

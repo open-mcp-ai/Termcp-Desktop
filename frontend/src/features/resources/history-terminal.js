@@ -44,7 +44,7 @@ export class HistoryTerminalController {
     if (this.instance) this.paint(this.instance);
   }
 
-  mount(element, shellID, tintRows = false) {
+  mount(element, shellID, tintRows = false, focus = null) {
     this.tintRows = tintRows;
     if (!element || !shellID) { this.dispose(); return; }
     let instance = this.instance;
@@ -62,7 +62,17 @@ export class HistoryTerminalController {
       instance.term.options.theme = appearance.theme;
       this.fit(instance);
       this.showStatus(instance);
+      if (!focus) {
+        instance.focusByte = null;
+        instance.focusNonce = null;
+        instance.focusSequence += 1;
+      }
       this.paint(instance);
+      if (focus?.shellID === shellID && focus.nonce !== instance.focusNonce) {
+        instance.focusNonce = focus.nonce;
+        instance.focusByte = Number(focus.byte);
+        if (!instance.loading) this.applyFocus(instance);
+      }
       return;
     }
     if (!window.Terminal || !window.FitAddon?.FitAddon) {
@@ -92,7 +102,10 @@ export class HistoryTerminalController {
     term.open(host);
     instance = { shellID, term, fit, host, rail, rowColours, element, fragment: null,
       next: 0, total: 0, loading: true, error: '', body: null, fetchSequence: 0,
-      timer: null, lastFetch: 0, resize: null, subscriptions: [], pendingWrites: new Set() };
+      timer: null, lastFetch: 0, resize: null, subscriptions: [], pendingWrites: new Set(),
+      focusByte: focus?.shellID === shellID ? Number(focus.byte) : null,
+      focusNonce: focus?.shellID === shellID ? focus.nonce : null,
+      focusSequence: 0 };
     this.instance = instance;
     instance.resize = new ResizeObserver(() => this.fit(instance));
     instance.resize.observe(element);
@@ -166,8 +179,67 @@ export class HistoryTerminalController {
         instance.body = null;
         this.showStatus(instance);
         this.updateRail(instance);
+        if (Number.isFinite(instance.focusByte)) this.applyFocus(instance);
       }
     }
+  }
+
+  async applyFocus(instance) {
+    const byte = Number(instance.focusByte);
+    if (this.instance !== instance || !Number.isFinite(byte) || byte < 0) return;
+    const sequence = ++instance.focusSequence;
+    try {
+      const first = await this.railWindow(instance, 0, 1);
+      const total = Number(first?.total_rows);
+      if (!Number.isSafeInteger(total) || total <= 0) return;
+      let low = 0;
+      let high = total;
+      let row = -1;
+      while (low < high && this.instance === instance) {
+        const top = Math.max(0, Math.floor((low + high) / 2) - 128);
+        const count = Math.min(256, total - top);
+        const body = await this.railWindow(instance, top, count);
+        const spans = Array.isArray(body?.spans) ? body.spans : [];
+        const exact = spans.findIndex(span => span && byte >= Number(span.start) && byte < Number(span.end));
+        if (exact >= 0) { row = top + exact; break; }
+        const mapped = spans.map((span, index) => span ? { span, index } : null).filter(Boolean);
+        if (!mapped.length) break;
+        const firstSpan = mapped[0].span;
+        const lastSpan = mapped[mapped.length - 1].span;
+        if (byte < Number(firstSpan.start)) {
+          high = mid;
+        } else if (byte >= Number(lastSpan.end)) {
+          low = Math.max(low, top + count);
+        } else {
+          const next = mapped.find(item => Number(item.span.end) > byte);
+          row = top + (next || mapped[mapped.length - 1]).index;
+          break;
+        }
+      }
+      if (this.instance !== instance || sequence !== instance.focusSequence || row < 0) return;
+      instance.focusRow = row;
+      void instance.term.scrollToLine(Math.max(0, row - Math.floor(instance.term.rows / 2)));
+      instance.body = null;
+      this.updateRail(instance);
+      const detail = instance.element?.closest('.history-page')?.querySelector('.history-row-detail');
+      if (detail) detail.textContent = `Located event at byte ${byte.toLocaleString()} on row ${row + 1}.`;
+    } catch (error) {
+      this.core.log?.('warn', 'History activity location unavailable', String(error));
+    }
+  }
+
+  railWindow(instance, top, count) {
+    const query = new URLSearchParams({
+      cols: String(instance.term.cols),
+      height: String(instance.term.rows),
+      top: String(top),
+      count: String(count),
+    });
+    return this.core.api('GET', `/api/shells/${encodeURIComponent(instance.shellID)}/rail?${query}`)
+      .then(response => {
+        if (response.status >= 400) throw new Error(response.body || `HTTP ${response.status}`);
+        return response.data;
+      });
   }
 
   showStatus(instance) {
@@ -267,6 +339,10 @@ export class HistoryTerminalController {
         cell.classList.add(`history-cause-${kinds[value.cause]}`);
         if (cells[row - 1]?.cause !== value.cause) cell.classList.add('history-cause-top');
         if (cells[row + 1]?.cause !== value.cause) cell.classList.add('history-cause-bottom');
+      }
+      const focus = Number(instance.focusByte);
+      if (Number.isFinite(focus) && focus >= value.start && (focus < value.end || (value.start === value.end && focus === value.start))) {
+        cell.classList.add('history-focus-cell');
       }
       const time = value.time > 0 ? new Date(value.time).toLocaleString() : t('Time unavailable');
       cell.title = `${t(labels[value.status] || 'Terminal output')} · ${time} · ${t('Row')} ${view.top + row + 1} · ${value.start}–${value.end} ${t('bytes')}${value.review ? ` · ${t('Approval decision')}` : ''}`;
