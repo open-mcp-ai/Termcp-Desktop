@@ -7,10 +7,15 @@ require (
 	github.com/gogpu/systray v0.3.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mark3labs/mcp-go v0.50.0
-	github.com/open-mcp-ai/termcp v0.2.8
+	github.com/open-mcp-ai/termcp v0.2.9
 	github.com/wailsapp/wails/v2 v2.15.0
 	golang.org/x/sys v0.47.0
 )
+
+// The upstream v0.2.9 no_webui branch returns before mounting its management
+// API. Keep the source patch and its regression in third_party/ until the same
+// wiring is available from a published upstream module version.
+replace github.com/open-mcp-ai/termcp => ./third_party/termcp-core
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect

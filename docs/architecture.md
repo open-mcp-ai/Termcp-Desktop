@@ -26,11 +26,15 @@ flowchart TB
 
 应用只管理固定在 `127.0.0.1:18765` 的本机 Core：
 
-1. 未注册系统服务时，在 Wails 进程内构造 termcp 的 SSH server、storage、message、session、sshconfig、forward、MCP 和 WebUI handler。
+1. 未注册系统服务时，通过公开 `config.Default()` + 显式数据目录/loopback 地址/端口调用 `core.New(core.Options{Config, Version})`，再调用同步的 `core.Start()`。Desktop 自管 `net.Listener` 与 `http.Server`，用日志中间件包裹同一 `core.Handler()`；不调用 `core.Listen()`，也不手工构造 session、SSH、MCP 或转发依赖。
 2. 注册服务时，先停止进程内 Core，再写入平台服务定义，以同一可执行文件的 `--core-service` 模式启动并等待本机 API 就绪。
 3. 已注册服务时，GUI 只附着本机 API；关闭桌面窗口不停止服务进程。
 4. 卸载服务时，先停止服务、移除定义，再立即恢复进程内 Core，保证桌面端继续可用。
-5. Core 就绪后，资源管理器从 `/api/connections`、`/api/sessions`、`/api/forwards` 生成快照，并通过 `/api/version` 显示当前应答实例的版本；已结束的 session 进入历史视图。历史页从字节 0 分页读取 `/api/shells/{id}/output-range`，在独立的只读 xterm 中连续回放，通过 `/api/shells/{id}/rail?cols=…&height=…&top=…&count=…` 获取可见终端行的字节区间和来源标记。人工输入为黄色，AI 输入为粉色，输出为绿色；颜色带以 `.xterm-screen` 的实际位置和行高对齐，滚动、字体和窗口尺寸变化时重新读取行映射。输入标记只在提交整行时生成；片段输入不会各自产生标记，命令正文取自终端回显。
+5. 就绪检查同时核对 `/api/version` 的实际版本、sessions/extensions/approvals/clients/activity、`/api.md`、`/api/term` 和 `/api/ui/ws` 路由；只有端口响应不算就绪。资源管理器随后从 `/api/connections`、`/api/sessions`、`/api/forwards` 生成快照。历史页从字节 0 分页读取 `/api/shells/{id}/output-range`，在独立的只读 xterm 中连续回放，通过 `/api/shells/{id}/rail?cols=…&height=…&top=…&count=…` 获取可见终端行的字节区间和来源标记。人工输入为黄色，AI 输入为粉色，输出为绿色；颜色带以 `.xterm-screen` 的实际位置和行高对齐，滚动、字体和窗口尺寸变化时重新读取行映射。输入标记只在提交整行时生成；片段输入不会各自产生标记，命令正文取自终端回显。
+
+停止时先关闭跟踪到的 `/api/ui/ws` 连接并停止 Desktop listener，再调用 `core.Close(reason)`；MCP SSE/streamable 长连接由同一 HTTP 层关闭。Core `Close` 与 listener 退出都有独立超时，防止把“已请求停止”误当“资源已回收”。附着系统服务模式只调用 `Attach()`，以真实版本和必要接口确认兼容后进入只读所有权状态，关闭 GUI 只解除附着。
+
+所有 Go test/vet、Wails 开发与正式构建统一带 `no_webui`，Linux 同时带 `webkit2_41`。Core 只保留 `internal/webui/assets/api.md` 静态资产；`/`、上游 static/theme/xterm 路径均为 404。Desktop 自有 `frontend/dist` 仍由 Wails 正常嵌入。
 
 所有 Wails 绑定、Core 生命周期、系统服务操作、GUI 到 Core 的出站请求，以及 Core 的入站 HTTP 接口共享结构化日志字段。日志不记录请求正文、凭据和查询参数值；单文件 10 MiB 或跨日轮转，保留 14 天。
 

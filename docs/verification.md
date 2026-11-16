@@ -1,5 +1,28 @@
 # 程序验证记录
 
+## termcp Core v0.2.9 Desktop 升级（2026-11-16）
+
+| 检查 | 结果 |
+| --- | --- |
+| 版本契约 | Desktop `0.1.3`；Core 基线 `v0.2.9`，实际源码补丁标识 `0.2.9+desktop.1`；固定上游提交 `714f8d491d0913fd7012afadc7f22f062e213839`；补丁 SHA-256 `2705165dc26906ca33dea87402e418571845c468336c997bf0f618988382b832`；`npm run check` 版本校验通过 |
+| Core API-only 阻塞 | 原版 `no_webui` 探针复现 `/api.md`、version/sessions/extensions/approvals/clients 与 WS 均为 404，`ls ext` 为 422 `not_configured`；补丁后同一探针管理 API、`/api.md`、WS 初始 `sessions` 事件和 `ls ext` 200 通过，`/`、static、themes、vendor/xterm 404 |
+| Desktop 构建标签 | Go test/vet、Wails arm64、Wails Windows amd64 均显示 `no_webui`；Linux 编译命令使用 `no_webui,webkit2_41`；三平台 `go list` 的 Core EmbedFiles 均为且仅为 `assets/api.md` |
+| Core 生命周期 | 真实 `core.New → Start → Desktop net/http` 集成通过；端口冲突返回明确 bind 错误且可再启动；停止关闭 WS、释放端口并可重启；附着模式不启动/停止外部 Core；错误版本拒绝附着 |
+| MCP 与 TERM | 外部 mcp-go 客户端完成 streamable HTTP initialize、tools/list、prompts/list（含 learn-api）、tools/call、并发调用、断开重连；SSE initialize 通过；`POST /api/term` 返回 TERM/1 结构化 envelope；`notify` 作为真实 `ui_notify` WS 帧送达 |
+| 审批 | 真实 MCP 输入触发 pending 并经 `/api/ui/ws` 推送 `approval` 事件，批准后 Shell 输出出现测试标记；MCP file write 在批准前不落盘，批准后内容一致；`GET /api/approvals/{id}` 可读取执行记录 |
+| 扩展兼容 | 旧 `kind` 仅被忽略，真实 `command/mode` 生效；旧 target 与多 targets 均列出；模板、typed holes、本地 values、preview、resident、`idle_timeout=0`、`termcp_tool` 无损往返；批量导出保留 `{{hole}}`/params 且不含本地值 |
+| URL peer | 本地 mock streamable MCP peer 可通过 `open ext` 发现和调用；`/ext/{name}/stream` initialize 通过；URL/headers 更新后旧 `mcp:<n>` handle 返回 `extension_changed`，新 handle 使用新 endpoint/header；删除后旧 handle 失效 |
+| 历史与旧数据 | 现有批量加密导入导出、旧 manifest 中归档子 Shell、Core marks/rail/output-range 回放测试继续通过；远端默认目录改由 `POST /api/term` 的 getwd 执行，internal 保持用户 Home |
+| 集成文档 | `/api.md` 与 learn-api 通过；`/skills.md` 死链已移除；Desktop 导出薄 `SKILL.md`，内容指向 `/api.md`、`/api/term`、`help`、`/sse`、`/stream` |
+| 前端检查 | 5 项发布脚本测试、50 项前端单测、Vite production build、16 项 Playwright 桌面/窄屏布局测试通过 |
+| Go 检查 | `npm run check` 的 Go 全量测试与 vet 通过；`go test -tags no_webui -race -shuffle=on ./... -count=1` 通过 |
+| Core 补丁回归 | 补丁模块 `go test -tags no_webui ./core ./internal/extensions ./internal/mcp -count=1` 最终 1069 项通过；补丁相关用例 `-race` 通过。一次全量重跑曾命中既有 `TestARefusedCloseLeavesEveryChannelAlive` 瞬时失败，单测 `-count=3` 与随后全量重跑均通过 |
+| macOS 构建 | `npm run build` 成功生成 arm64 `Termcp.app`；Go 直接构建 darwin/amd64 成功；包内 build info 显示 Core `v0.2.9 => ./third_party/termcp-core` |
+| Windows 构建 | Wails `windows/amd64` 成功生成 GUI `Termcp.exe`；build info 显示 `no_webui` 与本地补丁 replacement |
+| Linux 构建 | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags=no_webui,webkit2_41` 成功；当前 macOS 上 Wails 明确提示不支持交叉构建 Linux，必须由 Linux runner 原生构建 |
+| no-WebUI 产物证据 | Core 源码树未保留上游 HTML/JS/CSS/theme/xterm 页面资产；仅保留 `internal/webui/assets/api.md` 与 `docs/api.md`；Desktop 自有 `frontend/public/vendor/xterm` 不受影响 |
+| 未验证 | 尝试用实际 macOS `--core-service` 在临时数据目录运行，但本机 `127.0.0.1:18765` 已有真实服务占用，按隔离要求停止探针；Windows/Linux 原生启动、系统服务注册/卸载、SCM/systemd/LaunchAgent、真实 SSH/SFTP/转发、托盘和系统通知需在对应平台运行验证 |
+
 ## termcp Core v0.2.8 运行时与观测集成（2026-10-27）
 
 | 检查 | 结果 |

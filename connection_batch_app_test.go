@@ -4,9 +4,9 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/configcrypt"
 	"github.com/open-mcp-ai/termcp/internal/storage"
@@ -31,7 +31,7 @@ kind = "internal"
 		t.Fatal(err)
 	}
 	perHostHeaders := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := readyCoreTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/api/sessions" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"sessions":[]}`))
@@ -79,7 +79,7 @@ kind = "internal"
 	defer server.Close()
 
 	service := serviceForURL(t, server.URL)
-	if err := service.Start(); err != nil {
+	if err := service.Attach(2 * time.Second); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Stop() })
@@ -141,7 +141,7 @@ func TestSnapshotIncludesArchivedShellFromPersistedManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := readyCoreTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/connections":
@@ -160,7 +160,7 @@ func TestSnapshotIncludesArchivedShellFromPersistedManifest(t *testing.T) {
 	}))
 	defer server.Close()
 	service := serviceForURL(t, server.URL)
-	if err := service.Start(); err != nil {
+	if err := service.Attach(2 * time.Second); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Stop() })
@@ -186,7 +186,7 @@ func TestArchiveShellUsesArchiveEndpointAndVerifiesRetainedRecord(t *testing.T) 
 	archiveCalls := 0
 	deleteCalls := 0
 	retained := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := readyCoreTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/shells/shell-one/archive":
@@ -217,7 +217,7 @@ func TestArchiveShellUsesArchiveEndpointAndVerifiesRetainedRecord(t *testing.T) 
 	}))
 	defer server.Close()
 	service := serviceForURL(t, server.URL)
-	if err := service.Start(); err != nil {
+	if err := service.Attach(2 * time.Second); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Stop() })

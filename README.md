@@ -56,7 +56,7 @@
 
 **Termcp Desktop** is the native desktop client for [termcp](https://github.com/open-mcp-ai/termcp). It brings Core lifecycle management, SSH resources, and real PTY terminals into a cross-platform window so humans and AI agents can share, observe, and take over the same sessions.
 
-This is not an Electron wrapper. The desktop shell uses [Wails v2](https://wails.io/docs/introduction/) and the system WebView. The termcp Core is embedded as a Go module, while the GUI communicates with it through the same stable REST and WebSocket boundary.
+This is not an Electron wrapper. The desktop shell uses [Wails v2](https://wails.io/docs/introduction/) and the system WebView. The termcp Core is embedded as a Go module, while the GUI communicates with it through the same stable REST and WebSocket boundary. Core builds use `no_webui`: its management API, MCP server, WebSocket and `/api.md` remain, while the upstream browser HTML, JavaScript, CSS, themes and xterm assets are not embedded or served.
 
 - **Desktop users** manage connections, sessions, shells, files, and forwards through an explorer-style interface.
 - **AI agents** operate the same real terminals through termcp's MCP server or Agent Skill.
@@ -86,7 +86,7 @@ This is not an Electron wrapper. The desktop shell uses [Wails v2](https://wails
 - **English and Simplified Chinese UI** — switch the application and tray menus immediately from Settings.
 - **Observable and private by default** — desktop, Core-service, Wails-binding, and REST operations use structured JSON Lines logs without passwords, private keys, tokens, or request bodies.
 
-See the [API coverage matrix](docs/api-coverage.md) for the desktop implementation of the Core WebUI contract.
+See the [API coverage matrix](docs/api-coverage.md) for the desktop implementation of the Core management contract.
 
 Approval defaults are saved by the desktop app and synchronized to each Core connection profile as `default_approval`. New sessions inherit that profile value; changing a default does not change running sessions. Actions initiated directly in the desktop UI are human actions and do not enter the AI approval queue. System notifications use Wails' native notification API and require OS support and permission; pending requests remain visible in the app.
 
@@ -109,7 +109,7 @@ Termcp Desktop starts the Core on `127.0.0.1:18765` and stores data in `~/.termc
 
 ### Run from source
 
-Requirements: **Go 1.25.9+**, **Node.js**, and **npm**.
+Requirements: **Go 1.27.3+**, **Node.js**, and **npm**.
 
 ```bash
 git clone https://github.com/open-mcp-ai/Termcp-Desktop.git
@@ -155,7 +155,9 @@ npm run build
 
 On macOS, the build output is `build/bin/Termcp.app`. Windows produces `Termcp.exe`, and Linux produces a native executable. Release packages should be built on their target operating systems so they use the corresponding WebView and packaging toolchain.
 
-The desktop continues its own `v0.1.x` release series independently of termcp Core. New release tags contain only the desktop version (`vX.Y.Z`); each GitHub Release notes the bundled Core version, and Settings shows both versions. Increment the desktop patch version for each release, including Core upgrades. Prepare a release with `npm run release:version -- v0.1.2`. The script reads the pinned Core release from `go.mod` and updates the versions shown in the app. `npm run check` verifies all version fields, and the Release workflow verifies the desktop tag against the checked-in version. Previously published `v0.2.5+core.0.2.5` artifacts retain their original version; the resumed `v0.1.x` series starts at `v0.1.2`.
+The desktop continues its own `v0.1.x` release series independently of termcp Core. New release tags contain only the desktop version (`vX.Y.Z`); each GitHub Release notes the bundled Core version, and Settings shows both versions. Increment the desktop patch version for each release, including Core upgrades. Prepare a release with `npm run release:version -- v0.1.3`. The script reads the Core base version from `go.mod`, preserves an explicit patch suffix such as `0.2.9+desktop.1`, and updates the versions shown in the app. `npm run check` verifies all version fields, and the Release workflow verifies the desktop tag against the checked-in version.
+
+Core `v0.2.9` currently uses Desktop patch `0.2.9+desktop.1` from `third_party/termcp-core`. See [the Core patch notice](third_party/termcp-core/UPSTREAM.md) and the reviewable [patch](third_party/patches/termcp-v0.2.9-desktop.1.patch). Release requires an upstream published equivalent or a separately published immutable patched module; the relative replacement must then be removed.
 
 ### Project structure
 
@@ -166,6 +168,7 @@ internal/core/     Embedded Core lifecycle and service entry point
 internal/bridge/   Restricted API bridge and native upload/download
 internal/logging/  Structured logs, rotation, redaction, and cleanup
 internal/tray/     macOS, Windows, and Linux system tray integrations
+third_party/       Pinned Core source patch and reproducible no-WebUI asset proof
 docs/              Product, architecture, API coverage, and verification notes
 prototype/         Archived interaction prototypes
 ```

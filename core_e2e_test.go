@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -42,7 +43,7 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create MCP client: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
 	if err := mcpClient.Start(ctx); err != nil {
 		t.Fatalf("start MCP client: %v", err)
@@ -60,8 +61,83 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	if len(tools.Tools) != 1 || tools.Tools[0].Name != "term" {
 		t.Fatalf("MCP tools = %+v, want only term", tools.Tools)
 	}
-	if err := mcpClient.Close(); err != nil {
-		t.Fatalf("close MCP client: %v", err)
+	prompts, err := mcpClient.ListPrompts(ctx, mcpgo.ListPromptsRequest{})
+	if err != nil {
+		t.Fatalf("list MCP prompts: %v", err)
+	}
+	foundLearnAPI := false
+	for _, prompt := range prompts.Prompts {
+		if prompt.Name == "learn-api" {
+			foundLearnAPI = true
+		}
+	}
+	if !foundLearnAPI {
+		t.Fatalf("MCP prompts = %+v, want learn-api", prompts.Prompts)
+	}
+	call := mcpgo.CallToolRequest{}
+	call.Params.Name = "term"
+	call.Params.Arguments = map[string]any{"cmd": "ls", "structured_content": true}
+	callResult, err := mcpClient.CallTool(ctx, call)
+	if err != nil {
+		t.Fatalf("call MCP term: %v", err)
+	}
+	if callResult.IsError {
+		t.Fatalf("MCP term failed: %+v", callResult.Content)
+	}
+	structured, ok := callResult.StructuredContent.(map[string]any)
+	if !ok || structured["protocol"] != "TERM/1" || structured["code"] != float64(200) {
+		t.Fatalf("MCP structured TERM reply = %#v", callResult.StructuredContent)
+	}
+
+	concurrent := make(chan error, 2)
+	for _, command := range []string{"ls", "help"} {
+		command := command
+		go func() {
+			request := mcpgo.CallToolRequest{}
+			request.Params.Name = "term"
+			request.Params.Arguments = map[string]any{"cmd": command}
+			result, err := mcpClient.CallTool(ctx, request)
+			if err == nil && result.IsError {
+				err = fmt.Errorf("%s returned isError", command)
+			}
+			concurrent <- err
+		}()
+	}
+	for range 2 {
+		if err := <-concurrent; err != nil {
+			t.Fatalf("concurrent MCP call: %v", err)
+		}
+	}
+	t.Cleanup(func() { _ = mcpClient.Close() })
+	reconnected, err := client.NewStreamableHttpClient("http://127.0.0.1:"+strconv.Itoa(port)+"/stream", transport.WithContinuousListening())
+	if err != nil {
+		t.Fatalf("create reconnected MCP client: %v", err)
+	}
+	if err := reconnected.Start(ctx); err != nil {
+		t.Fatalf("start reconnected MCP client: %v", err)
+	}
+	if _, err := reconnected.Initialize(ctx, initRequest); err != nil {
+		t.Fatalf("reinitialize MCP client: %v", err)
+	}
+	if _, err := reconnected.CallTool(ctx, call); err != nil {
+		t.Fatalf("call after MCP reconnect: %v", err)
+	}
+	if err := reconnected.Close(); err != nil {
+		t.Fatalf("close reconnected MCP client: %v", err)
+	}
+
+	sseClient, err := client.NewSSEMCPClient("http://127.0.0.1:" + strconv.Itoa(port) + "/sse")
+	if err != nil {
+		t.Fatalf("create SSE MCP client: %v", err)
+	}
+	if err := sseClient.Start(ctx); err != nil {
+		t.Fatalf("start SSE MCP client: %v", err)
+	}
+	if _, err := sseClient.Initialize(ctx, initRequest); err != nil {
+		t.Fatalf("initialize SSE MCP client: %v", err)
+	}
+	if err := sseClient.Close(); err != nil {
+		t.Fatalf("close SSE MCP client: %v", err)
 	}
 	var version struct {
 		Version string `json:"version"`
@@ -171,6 +247,27 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	}
 	if len(clients.WebUI) == 0 {
 		t.Fatal("Core did not report the attached desktop WebSocket as a client")
+	}
+	notify := mcpgo.CallToolRequest{}
+	notify.Params.Name = "term"
+	notify.Params.Arguments = map[string]any{"cmd": "notify --title desktop-upgrade runtime notification"}
+	if result, err := mcpClient.CallTool(ctx, notify); err != nil || result.IsError {
+		t.Fatalf("notify_user directive failed: result=%+v err=%v", result, err)
+	}
+	for {
+		var event struct {
+			Type  string `json:"type"`
+			Title string `json:"title"`
+		}
+		if err := activitySocket.ReadJSON(&event); err != nil {
+			t.Fatalf("read UI notification: %v", err)
+		}
+		if event.Type == "ui_notify" {
+			if event.Title != "desktop-upgrade" {
+				t.Fatalf("UI notification title = %q", event.Title)
+			}
+			break
+		}
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {

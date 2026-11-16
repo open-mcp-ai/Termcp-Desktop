@@ -1,14 +1,14 @@
 {
   "name": "termcp-desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Termcp desktop manager and SSH workspace",
   "scripts": {
     "dev": "npm --prefix frontend run build && node scripts/serve.mjs",
-    "dev:wails": "go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 dev",
-    "build": "node scripts/set-release-version.mjs --check && npm --prefix frontend run build && go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build",
-    "test": "node --test scripts/*.test.mjs && npm --prefix frontend test && npm --prefix frontend run build && go test ./...",
-    "check": "node scripts/set-release-version.mjs --check && npm --prefix frontend run check && npm test && go vet ./...",
+    "dev:wails": "node scripts/wails.mjs dev",
+    "build": "node scripts/set-release-version.mjs --check && npm --prefix frontend run build && node scripts/wails.mjs build",
+    "test": "node --test scripts/*.test.mjs && npm --prefix frontend test && npm --prefix frontend run build && node scripts/go.mjs test ./... && node scripts/verify-core-assets.mjs",
+    "check": "node scripts/set-release-version.mjs --check && npm --prefix frontend run check && npm test && node scripts/go.mjs vet ./...",
     "release:version": "node scripts/set-release-version.mjs"
   }
 }

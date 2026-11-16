@@ -59,9 +59,9 @@ const demo = {
     ] },
   ],
   extensions: [
-    { name: 'docs', kind: 'skill', target: 'internal', description: 'Read-only documentation window', enabled: true, status: 'idle', forwards: [] },
-    { name: 'release-check', kind: 'mcp', target: 'dev-server', description: 'Release inspection MCP server', enabled: true, status: 'unavailable', failure: { at: Date.now() - 30000, stage: 'start', reason: 'stderr: command not found: release-mcp' }, next_retry_ms: Date.now() + 12000, forwards: [] },
-    { name: 'audit-console', kind: 'prompt', target: 'staging', description: 'Investigative shell with audit notes', enabled: true, status: 'available', session_id: 'ext-session-audit', shell_id: 'ext-shell-audit', forwards: [] },
+    { name: 'docs', target: 'internal', description: 'Read-only documentation window', enabled: true, status: 'available', host_count: 1, forward_count: 0, holes: [{ name: 'root', type: 'string', help: 'Documentation root on the target', set: true, value: '~/skills/docs/' }], forwards: [] },
+    { name: 'release-check', target: 'dev-server', description: 'Release inspection MCP server', enabled: true, status: 'unavailable', host_count: 1, forward_count: 0, failure: { at: Date.now() - 30000, stage: 'start', reason: 'stderr: command not found: release-mcp' }, next_retry_ms: Date.now() + 12000, forwards: [] },
+    { name: 'audit-console', target: 'staging', description: 'Investigative shell with audit notes', enabled: true, status: 'available', session_id: 'ext-session-audit', shell_id: 'ext-shell-audit', host_count: 1, forward_count: 0, forwards: [] },
   ],
   forwards: [],
   fetched_at: now,
@@ -91,10 +91,11 @@ const demoConnections = new Map([
 
 const demoExtensions = new Map(demo.extensions.map(extension => [extension.name, extension]));
 const demoExtensionDocuments = new Map([
-  ['docs', 'kind = "skill"\ntarget = "internal"\ndescription = "Read-only documentation window"\npaths = ["~/skills/docs/"]\n'],
-  ['release-check', 'kind = "mcp"\ntarget = "dev-server"\ndescription = "Release inspection MCP server"\nmode = "pipe"\ncommand = "release-mcp"\n'],
-  ['audit-console', 'kind = "prompt"\ntarget = "staging"\ndescription = "Investigative shell with audit notes"\nmode = "pty"\n'],
+  ['docs', 'target = "internal"\ndescription = "Read-only documentation window"\npaths = ["{{root}}"]\n\n[params.root]\ntype = "string"\nhelp = "Documentation root on the target"\n'],
+  ['release-check', 'target = "dev-server"\ndescription = "Release inspection MCP server"\nmode = "pipe"\ncommand = "release-mcp"\n'],
+  ['audit-console', 'target = "staging"\ndescription = "Investigative shell with audit notes"\nmode = "pty"\n'],
 ]);
+const demoExtensionValues = new Map([['docs', { root: '~/skills/docs/' }]]);
 
 const demoApprovals = [{ request: { id: 'approval-demo-01', session_id: 'session-demo-01', shell_id: 'shell-demo-01', source: 'mcp', kind: 'shell_input', summary: 'Run npm test', text: 'npm test', keys: ['enter'], state: 'pending', created_at: Date.now(), need: 1 }, need: 1 }];
 const demoActivity = [
@@ -128,21 +129,27 @@ function demoTOMLField(raw, key, fallback = '') {
 }
 
 function demoExtensionDocument(summary) {
-  return `kind = "${summary.kind}"\ntarget = "${summary.target}"\n${summary.description ? `description = ${JSON.stringify(summary.description)}\n` : ''}enabled = ${summary.enabled !== false}\n`;
+  const target = summary.target ? `target = ${JSON.stringify(summary.target)}\n` : '';
+  const url = summary.url ? `url = ${JSON.stringify(summary.url)}\n` : '';
+  return `${target}${url}${summary.description ? `description = ${JSON.stringify(summary.description)}\n` : ''}enabled = ${summary.enabled !== false}\nresident = ${summary.resident === true}\n`;
 }
 
 function demoExtensionDetail(extension) {
   return {
     extension,
-    kind: extension.kind,
-    mode: extension.kind === 'skill' ? '' : (extension.kind === 'mcp' ? 'pipe' : 'pty'),
-    command: extension.kind === 'mcp' ? 'release-mcp' : '',
+    target: extension.target || '',
+    targets: [],
+    mode: extension.name === 'docs' ? '' : (extension.name === 'release-check' ? 'pipe' : 'pty'),
+    command: extension.name === 'release-check' ? 'release-mcp' : '',
     args: [],
     allow: [],
-    paths: extension.kind === 'skill' ? ['~/skills/docs/'] : [],
+    paths: extension.name === 'docs' ? ['{{root}}'] : [],
+    holes: extension.holes || [],
     notes: '',
     failures: extension.failure ? [extension.failure] : [],
     forward_decls: [],
+    resident: extension.resident === true,
+    termcp_tool: extension.termcp_tool || '',
   };
 }
 
@@ -166,7 +173,7 @@ function demoAPI(method, rawPath, body) {
       let name = original;
       for (let suffix = 2; demoExtensions.has(name); suffix += 1) name = `${original}-${suffix}`;
       if (name !== original) renamed.push({ from: original, to: name });
-      const extension = { name, kind: demoTOMLField(entry, 'kind', 'custom'), target: demoTOMLField(entry, 'target', ''), description: demoTOMLField(entry, 'description'), enabled: demoTOMLField(entry, 'enabled', true) !== false, status: demoTOMLField(entry, 'enabled', true) !== false ? 'idle' : 'disabled', forwards: [] };
+      const extension = { name, target: demoTOMLField(entry, 'target', ''), description: demoTOMLField(entry, 'description'), enabled: demoTOMLField(entry, 'enabled', true) !== false, status: demoTOMLField(entry, 'enabled', true) !== false ? 'idle' : 'disabled', host_count: demoTOMLField(entry, 'target', '') ? 1 : 0, forwards: [] };
       demoExtensions.set(name, extension);
       demoExtensionDocuments.set(name, demoExtensionDocument(extension));
     }
@@ -175,9 +182,10 @@ function demoAPI(method, rawPath, body) {
   if (method === 'POST' && url.pathname === '/api/extensions') {
     const name = String(payload.name || url.searchParams.get('name') || '').trim();
     if (!name) return response('name is required', 'text/plain');
-    const extension = { name, kind: payload.kind || 'custom', target: payload.target || '', description: payload.description || '', enabled: payload.enabled !== false, status: payload.enabled === false ? 'disabled' : 'idle', forwards: [] };
+    const extension = { name, target: payload.target || '', targets: payload.targets || [], description: payload.description || '', enabled: payload.enabled !== false, status: payload.enabled === false ? 'disabled' : 'idle', url: payload.url || '', resident: payload.resident === true, termcp_tool: payload.termcp_tool || '', host_count: payload.targets?.length || (payload.target ? 1 : 0), forward_count: 0, forwards: [] };
     demoExtensions.set(name, extension);
-    demoExtensionDocuments.set(name, demoExtensionDocument(extension));
+    demoExtensionDocuments.set(name, payload.template || demoExtensionDocument(extension));
+    if (payload.values && typeof payload.values === 'object') demoExtensionValues.set(name, payload.values);
     return response({ extension });
   }
   if (parts[1] === 'extensions' && parts[2]) {
@@ -186,19 +194,27 @@ function demoAPI(method, rawPath, body) {
     if (!extension) return response({ error: 'extension not found' }, 'application/json');
     if (method === 'GET' && url.searchParams.get('format') === 'toml') return response(demoExtensionDocuments.get(name) || demoExtensionDocument(extension), 'application/toml');
     if (method === 'GET') return response(demoExtensionDetail(extension));
+    if (method === 'POST' && parts[3] === 'preview') return response(demoExtensionDocuments.get(name) || String(body || ''), 'application/toml');
     if (method === 'PUT') {
       if (typeof payload === 'object' && payload) {
+        if (typeof payload.template === 'string' && payload.template.trim()) demoExtensionDocuments.set(name, payload.template);
+        if (payload.values && typeof payload.values === 'object') {
+          demoExtensionValues.set(name, { ...(demoExtensionValues.get(name) || {}), ...payload.values });
+          extension.holes = (extension.holes || []).map(hole => Object.hasOwn(payload.values, hole.name) ? { ...hole, set: payload.values[hole.name] != null, value: payload.values[hole.name] } : hole);
+        }
         Object.assign(extension, {
-          kind: payload.kind ?? extension.kind,
           target: payload.target ?? extension.target,
           description: payload.description ?? extension.description,
           enabled: payload.enabled ?? extension.enabled,
+          url: payload.url ?? extension.url,
+          resident: payload.resident ?? extension.resident,
+          termcp_tool: payload.termcp_tool ?? extension.termcp_tool,
+          targets: payload.targets ?? extension.targets,
         });
         extension.status = extension.enabled ? (extension.status === 'available' ? extension.status : 'idle') : 'disabled';
-        demoExtensionDocuments.set(name, demoExtensionDocument(extension));
+        if (!payload.template) demoExtensionDocuments.set(name, demoExtensionDocument(extension));
       } else {
         extension.description = demoTOMLField(body, 'description', extension.description);
-        extension.kind = demoTOMLField(body, 'kind', extension.kind);
         extension.target = demoTOMLField(body, 'target', extension.target);
         demoExtensionDocuments.set(name, String(body || ''));
       }
@@ -207,6 +223,7 @@ function demoAPI(method, rawPath, body) {
     if (method === 'DELETE') {
       demoExtensions.delete(name);
       demoExtensionDocuments.delete(name);
+      demoExtensionValues.delete(name);
       return response('');
     }
     if (method === 'POST' && parts[3] === 'retry') {
@@ -215,6 +232,7 @@ function demoAPI(method, rawPath, body) {
       return response({ ok: true });
     }
   }
+  if (method === 'POST' && parts[1] === 'extensions' && parts[2] && parts[3] === 'preview') return response(demoExtensionDocuments.get(parts[2]) || '', 'application/toml');
   if (method === 'GET' && url.pathname === '/api/connections') return response({ connections: demo.connections });
   if (parts[1] === 'connections' && parts[2]) {
     const name = parts[2];
@@ -255,7 +273,6 @@ function demoAPI(method, rawPath, body) {
     }
   }
   if (parts[1] === 'sessions' && parts[2] && parts[3] === 'files') {
-    if (parts[4] === 'default-directory') return response({ directory: '/home/developer' });
     const requested = url.searchParams.get('path') || '/';
     return response({ name: requested.split('/').pop() || '/', is_dir: true, size: 0, children: [
       { name: 'src', is_dir: true, size: 0, mod_time: now },
@@ -364,12 +381,16 @@ export const core = {
     return bridge.call('ChooseAndUploadFile', sessionID, directory);
   },
   async defaultDirectory(sessionID) {
-    const result = await this.api('GET', `/api/sessions/${encodeURIComponent(sessionID)}/files/default-directory`);
-    return result.data?.directory || '';
+    if (bridge.available()) return bridge.call('DefaultDirectory', sessionID);
+    return '/home/developer';
   },
   async save(path, filename) {
     if (!bridge.available()) throw new Error(t('Local downloads are disabled in browser preview'));
     return bridge.call('SaveAPIResource', path, filename);
+  },
+  async exportTermcpSkill() {
+    if (!bridge.available()) throw new Error(t('Local downloads are disabled in browser preview'));
+    return bridge.call('SaveTermcpSkill');
   },
   async exportConnections(names, password = '') {
     if (bridge.available()) return bridge.call('ExportConnections', names, password);

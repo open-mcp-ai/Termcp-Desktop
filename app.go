@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -471,6 +473,66 @@ func (a *App) CreateShell(sessionID, name string) (err error) {
 	return a.bridge.DoJSON(http.MethodPost, "/api/sessions/"+url.PathEscape(sessionID)+"/shells", body, nil)
 }
 
+// DefaultDirectory uses Core's own getwd operation for remote sessions. The
+// internal profile intentionally keeps the desktop's Home-directory semantics;
+// Core's internal SFTP working directory is the process CWD, not Home.
+func (a *App) DefaultDirectory(sessionID string) (directory string, err error) {
+	done := beginInterface("DefaultDirectory", "session_id", sessionID)
+	defer func() { done(err) }()
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", errors.New("session id is required")
+	}
+	var session model.Session
+	if err = a.bridge.GetJSON("/api/sessions/"+url.PathEscape(sessionID), &session); err != nil {
+		return "", err
+	}
+	if session.SSHEndpoint == "internal" {
+		return os.UserHomeDir()
+	}
+	var reply model.APIResponse
+	err = a.bridge.DoJSON(http.MethodPost, "/api/term", map[string]any{
+		"cmd": "get " + sessionID + " file . --op getwd",
+	}, &reply)
+	if err != nil {
+		return "", err
+	}
+	body := strings.TrimSpace(reply.Body)
+	if strings.HasPrefix(body, "{") {
+		var envelope struct {
+			Code int    `json:"code"`
+			Body string `json:"body"`
+		}
+		if err = json.Unmarshal([]byte(body), &envelope); err != nil {
+			return "", fmt.Errorf("decode Core getwd reply: %w", err)
+		}
+		if envelope.Code >= http.StatusBadRequest {
+			return "", fmt.Errorf("Core getwd failed: %s", strings.TrimSpace(envelope.Body))
+		}
+		body = strings.TrimSpace(envelope.Body)
+	}
+	if parsed := parseDirectoryReply(body); parsed != "" {
+		return parsed, nil
+	}
+	return "", fmt.Errorf("Core getwd reply has no directory: %s", body)
+}
+
+func parseDirectoryReply(body string) string {
+	var structured struct {
+		Directory string `json:"directory"`
+	}
+	if json.Unmarshal([]byte(body), &structured) == nil && strings.TrimSpace(structured.Directory) != "" {
+		return strings.TrimSpace(structured.Directory)
+	}
+	for _, line := range strings.Split(body, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(key), "directory") {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func (a *App) TerminateSession(sessionID string) (err error) {
 	done := beginInterface("TerminateSession", "session_id", sessionID)
 	defer func() { done(err) }()
@@ -603,6 +665,25 @@ func (a *App) SaveAPIResource(apiPath, suggestedName string) (destination string
 	done := beginInterface("SaveAPIResource", "path", safeAPIPath(apiPath), "suggested_extension", filepath.Ext(suggestedName))
 	defer func() { done(err) }()
 	return a.bridge.SaveAPIResource(a.ctx, apiPath, suggestedName)
+}
+
+// SaveTermcpSkill exports the Desktop-owned thin HTTP skill. It is documentation
+// only and points agents back to the running Core for live commands and API facts.
+func (a *App) SaveTermcpSkill() (destination string, err error) {
+	done := beginInterface("SaveTermcpSkill")
+	defer func() { done(err) }()
+	destination, err = runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:                "Export Termcp HTTP skill",
+		DefaultFilename:      "SKILL.md",
+		CanCreateDirectories: true,
+	})
+	if err != nil || destination == "" {
+		return destination, err
+	}
+	if err = os.WriteFile(destination, []byte(termcpSkillMarkdown), 0o600); err != nil {
+		return "", err
+	}
+	return destination, nil
 }
 
 func (a *App) CoreWebSocketURL() string {

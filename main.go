@@ -23,6 +23,9 @@ var assets embed.FS
 //go:embed build/trayicon.png
 var trayIconPNG []byte
 
+//go:embed skills/termcp/SKILL.md
+var termcpSkillMarkdown string
+
 func main() {
 	dataDir := ""
 	if hasArgument("--core-service") {

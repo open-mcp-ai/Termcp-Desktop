@@ -10,8 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
+	guiConfig "github.com/open-mcp-ai/termcp/gui/internal/config"
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
 	"github.com/open-mcp-ai/termcp/gui/internal/model"
 )
@@ -42,8 +45,19 @@ func TestConfigureTermcpDataDirUsesHomeDirectory(t *testing.T) {
 	}
 }
 
+func TestBuiltInHTTPMCPSkillPointsAtLiveCoreSurfaces(t *testing.T) {
+	for _, text := range []string{"GET /api.md", "POST /api/term", "help <directive>", "/sse", "/stream"} {
+		if !strings.Contains(termcpSkillMarkdown, text) {
+			t.Fatalf("embedded HTTP skill is missing %q", text)
+		}
+	}
+	if strings.Contains(termcpSkillMarkdown, "skills.md") {
+		t.Fatal("embedded HTTP skill links to the removed /skills.md asset")
+	}
+}
+
 func TestAPIProxiesTextJSONAndBinary(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := readyCoreTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/sessions":
 			w.Header().Set("Content-Type", "application/json")
@@ -67,7 +81,7 @@ func TestAPIProxiesTextJSONAndBinary(t *testing.T) {
 	}))
 	defer server.Close()
 	service := serviceForURL(t, server.URL)
-	if err := service.Start(); err != nil {
+	if err := service.Attach(2 * time.Second); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Stop() })
@@ -101,9 +115,59 @@ func TestAPIRejectsRequestsOutsideCoreAPI(t *testing.T) {
 	}
 }
 
+func TestDefaultDirectoryUsesCoreGetwdForRemoteAndHomeForInternal(t *testing.T) {
+	t.Setenv("TERMCP_DATA_DIR", t.TempDir())
+	legacyRouteCalls := 0
+	server := readyCoreTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/sessions/remote":
+			_, _ = w.Write([]byte(`{"id":"remote","status":"running","ssh_endpoint":"remote"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/sessions/internal":
+			_, _ = w.Write([]byte(`{"id":"internal","status":"running","ssh_endpoint":"internal"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/term":
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "get remote file . --op getwd") {
+				t.Errorf("getwd command = %s", body)
+			}
+			_, _ = w.Write([]byte(`{"protocol":"TERM/1","code":200,"body":"directory: /srv/workspace"}`))
+		case strings.Contains(r.URL.Path, "/files/default-directory"):
+			legacyRouteCalls++
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	service := serviceForURL(t, server.URL)
+	if err := service.Attach(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Stop() })
+	app := newApp(service)
+
+	remote, err := app.DefaultDirectory("remote")
+	if err != nil || remote != "/srv/workspace" {
+		t.Fatalf("remote default directory = %q, %v", remote, err)
+	}
+	internal, err := app.DefaultDirectory("internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if internal != home {
+		t.Fatalf("internal default directory = %q, want Home %q", internal, home)
+	}
+	if legacyRouteCalls != 0 {
+		t.Fatalf("Desktop called the removed default-directory route %d times", legacyRouteCalls)
+	}
+}
+
 func TestGetSnapshotAggregatesCoreResources(t *testing.T) {
 	t.Setenv("TERMCP_DATA_DIR", t.TempDir())
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := readyCoreTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/connections":
@@ -125,7 +189,7 @@ func TestGetSnapshotAggregatesCoreResources(t *testing.T) {
 	defer server.Close()
 
 	service := serviceForURL(t, server.URL)
-	if err := service.Start(); err != nil {
+	if err := service.Attach(2 * time.Second); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Stop() })
@@ -144,7 +208,7 @@ func TestGetSnapshotAggregatesCoreResources(t *testing.T) {
 }
 
 func TestGetActivityAndClientsAggregateCoreObservability(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := readyCoreTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/sessions":
@@ -166,7 +230,7 @@ func TestGetActivityAndClientsAggregateCoreObservability(t *testing.T) {
 	defer server.Close()
 
 	service := serviceForURL(t, server.URL)
-	if err := service.Start(); err != nil {
+	if err := service.Attach(2 * time.Second); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Stop() })
@@ -203,4 +267,60 @@ func serviceForURL(t *testing.T, rawURL string) *corepkg.Service {
 		t.Fatal(err)
 	}
 	return corepkg.New(host, port)
+}
+
+// readyCoreTestServer fills only the readiness probes a mock handler leaves at
+// 404. Tests keep ownership of every route they define while Attach still runs
+// the same version and interface checks as a real system service.
+func readyCoreTestServer(t *testing.T, next http.Handler) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Termcp-Desktop-Ready") == "1" {
+			writeReadyProbe(w, r)
+			return
+		}
+		recorder := httptest.NewRecorder()
+		next.ServeHTTP(recorder, r)
+		if recorder.Code != http.StatusNotFound {
+			for key, values := range recorder.Header() {
+				w.Header()[key] = append([]string(nil), values...)
+			}
+			w.WriteHeader(recorder.Code)
+			_, _ = w.Write(recorder.Body.Bytes())
+			return
+		}
+		writeReadyProbe(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func writeReadyProbe(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/version":
+		_, _ = w.Write([]byte(`{"version":"v` + guiConfig.CoreVersion + `"}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/ui/ws":
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"Upgrade required"}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api.md":
+		w.Header().Set("Content-Type", "text/markdown")
+		_, _ = w.Write([]byte("# TERM/1 API\n"))
+	case r.Method == http.MethodPost && r.URL.Path == "/api/term":
+		_, _ = w.Write([]byte(`{"protocol":"TERM/1","code":200}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/connections":
+		_, _ = w.Write([]byte(`{"connections":[]}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/sessions":
+		_, _ = w.Write([]byte(`{"sessions":[]}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/extensions":
+		_, _ = w.Write([]byte(`{"extensions":[]}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/approvals":
+		_, _ = w.Write([]byte(`{"approvals":[],"count":0}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/clients":
+		_, _ = w.Write([]byte(`{"webui":[],"mcp":[]}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/activity":
+		_, _ = w.Write([]byte(`{"activity":[]}`))
+	default:
+		http.NotFound(w, r)
+	}
 }

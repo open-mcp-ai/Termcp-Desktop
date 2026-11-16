@@ -1,0 +1,425 @@
+package sshclient
+
+import (
+	"context"
+	"errors"
+	"net"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/open-mcp-ai/termcp/internal/sshserver"
+	"golang.org/x/crypto/ssh"
+)
+
+func testShell() string {
+	if runtime.GOOS == "windows" {
+		return "powershell.exe"
+	}
+	return "bash"
+}
+
+func ptyShellCmd() (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "powershell.exe", []string{"-NoLogo", "-NoProfile"}
+	}
+	return testShell(), nil
+}
+
+func testShellInput(s string) string {
+	if runtime.GOOS == "windows" {
+		return s + "\r\n"
+	}
+	return s + "\n"
+}
+
+func pipeEchoCommand() (string, []string, string) {
+	if runtime.GOOS == "windows" {
+		return "powershell.exe", []string{"-NoProfile", "-Command", "$input | Write-Output"}, "hello\r\n"
+	}
+	return "cat", nil, "hello\n"
+}
+
+func longRunningCommand() (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "powershell.exe", []string{"-NoProfile", "-Command", "Start-Sleep -Seconds 60"}
+	}
+	return "sleep", []string{"60"}
+}
+
+func failingCommand() (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "powershell.exe", []string{"-NoProfile", "-Command", "exit 1"}
+	}
+	return "false", nil
+}
+
+func startTestSSHServer(t *testing.T) *sshserver.Server {
+	t.Helper()
+	srv := sshserver.New()
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Stop() })
+	return srv
+}
+
+// dialAndStart creates an in-memory connection to the test server and starts a command.
+func dialAndStart(t *testing.T, srv *sshserver.Server, command string, args []string, pty bool, rows, cols int) *ExecSession {
+	t.Helper()
+	cfg := mintClientConfig(t, srv)
+	conn, err := srv.Dial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	es, err := StartWithConn(nil, conn, cfg, command, args, pty, rows, cols)
+	if err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	return es
+}
+
+func mintClientConfig(t *testing.T, srv *sshserver.Server) *ssh.ClientConfig {
+	t.Helper()
+	cfg, err := srv.MintClientConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestStart_PipeMode(t *testing.T) {
+	srv := startTestSSHServer(t)
+
+	command, args, input := pipeEchoCommand()
+	es := dialAndStart(t, srv, command, args, false, 24, 80)
+
+	es.Stdin.Write([]byte(input))
+	es.Stdin.Close()
+
+	<-es.Done()
+
+	if es.ExitCode() != 0 {
+		t.Fatalf("expected exit code 0, got %d", es.ExitCode())
+	}
+}
+
+func TestStart_PtyMode(t *testing.T) {
+	srv := startTestSSHServer(t)
+
+	sh, shArgs := ptyShellCmd()
+	es := dialAndStart(t, srv, sh, shArgs, true, 24, 80)
+
+	time.Sleep(200 * time.Millisecond)
+	es.Stdin.Write([]byte(testShellInput("echo pty_test")))
+
+	// Loop-read until we see the expected output
+	buf := make([]byte, 4096)
+	var allOutput string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(allOutput, "pty_test") {
+		n, _ := es.Stdout.Read(buf)
+		allOutput += string(buf[:n])
+	}
+	if !strings.Contains(allOutput, "pty_test") {
+		t.Fatalf("expected output containing 'pty_test', got %q", allOutput)
+	}
+
+	es.Stdin.Write([]byte(testShellInput("exit")))
+	<-es.Done()
+}
+
+func TestStart_ResizePty(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("interactive PTY tests not stable on Windows ConPTY")
+	}
+	srv := startTestSSHServer(t)
+
+	sh, shArgs := ptyShellCmd()
+	es := dialAndStart(t, srv, sh, shArgs, true, 24, 80)
+	defer es.Close()
+
+	if err := es.ResizePty(50, 120); err != nil {
+		t.Fatalf("ResizePty failed: %v", err)
+	}
+
+	es.Stdin.Write([]byte(testShellInput("exit")))
+	<-es.Done()
+}
+
+func TestStart_Signal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signals not supported on Windows")
+	}
+	srv := startTestSSHServer(t)
+
+	command, args := longRunningCommand()
+	es := dialAndStart(t, srv, command, args, false, 24, 80)
+
+	time.Sleep(200 * time.Millisecond) // let server process start
+	if err := es.Signal("TERM"); err != nil {
+		t.Fatalf("Signal failed: %v", err)
+	}
+	// Close stdin to unblock server's stdin copy goroutine in pipe mode
+	es.Stdin.Close()
+
+	select {
+	case <-es.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("process did not exit after signal")
+	}
+}
+
+func TestStart_Close(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("session close is reported as EOF on Windows ConPTY")
+	}
+	srv := startTestSSHServer(t)
+
+	command, args := longRunningCommand()
+	es := dialAndStart(t, srv, command, args, false, 24, 80)
+
+	if err := es.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	select {
+	case <-es.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("process did not exit after close")
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		args []string
+		want string
+	}{
+		{"echo", []string{"hello"}, `echo hello`},
+		// shellQuote is the ARGV spelling: a spaced command with no args is ONE
+		// program name, so it is quoted as one token. The line spelling (pipes,
+		// redirects kept) is StartWithClientLine, which does not call this.
+		{"echo hello", nil, `'echo hello'`},
+		{"echo", []string{"a b"}, `echo 'a b'`},
+		{"echo", []string{`a"b`}, `echo 'a"b'`},
+		{"powershell.exe", []string{"-Command", `Write-Output ($_ -f 1)`}, `powershell.exe -Command 'Write-Output ($_ -f 1)'`},
+		{"echo", []string{"it's"}, `echo 'it'\''s'`},
+		{"my command", []string{"arg"}, `'my command' arg`},
+	}
+	for _, tc := range tests {
+		got := shellQuote(tc.cmd, tc.args)
+		if got != tc.want {
+			t.Fatalf("shellQuote(%q, %v) = %q, want %q", tc.cmd, tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestStart_CommandFailure(t *testing.T) {
+	srv := startTestSSHServer(t)
+
+	command, args := failingCommand()
+	es := dialAndStart(t, srv, command, args, false, 24, 80)
+
+	// Close stdin to unblock server's stdin copy goroutine in pipe mode
+	es.Stdin.Close()
+
+	select {
+	case <-es.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("process did not exit")
+	}
+	if es.ExitCode() != 1 {
+		t.Fatalf("expected exit code 1, got %d", es.ExitCode())
+	}
+}
+
+func TestDefaultPTYModes(t *testing.T) {
+	modes := defaultPTYModes()
+
+	required := map[string]uint8{
+		"ECHO":   ssh.ECHO,
+		"ICRNL":  ssh.ICRNL,
+		"ONLCR":  ssh.ONLCR,
+		"OPOST":  ssh.OPOST,
+		"ISIG":   ssh.ISIG,
+		"ICANON": ssh.ICANON,
+	}
+
+	for name, opcode := range required {
+		v, ok := modes[opcode]
+		if !ok {
+			t.Errorf("missing required terminal mode %s (opcode %d)", name, opcode)
+			continue
+		}
+		if v != 1 {
+			t.Errorf("terminal mode %s = %d, want 1 (enabled)", name, v)
+		}
+	}
+}
+
+// An empty command in pipe mode must be refused outright. There is no login
+// shell to ask for on a pipe channel, and the client must not invent one from
+// its own PATH: that path describes the machine termcp runs on, which for a
+// remote target is the wrong machine entirely. (Reported as a remote zsh host
+// receiving `C:\...\pwsh.exe` as its exec command.)
+func TestStart_PipeModeEmptyCommandRefused(t *testing.T) {
+	srv := startTestSSHServer(t)
+	cfg := mintClientConfig(t, srv)
+	conn, err := srv.Dial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	es, err := StartWithConn(nil, conn, cfg, "", nil, false, 24, 80)
+	if err == nil {
+		es.Close()
+		t.Fatal("expected an error for an empty pipe command")
+	}
+	if !strings.Contains(err.Error(), "pipe") {
+		t.Fatalf("error should name the pipe mode, got %v", err)
+	}
+	// The refusal must not leak this host's shell path into the message either.
+	if strings.Contains(err.Error(), testShell()) {
+		t.Fatalf("error must not suggest a local shell, got %v", err)
+	}
+}
+
+// A pty shell with no command asks the SERVER for its login shell. The test
+// server always has one, so this asserts the request is made rather than that a
+// particular shell name came back.
+func TestStart_PtyModeEmptyCommandUsesServerShell(t *testing.T) {
+	srv := startTestSSHServer(t)
+	es := dialAndStart(t, srv, "", nil, true, 24, 80)
+	defer es.Close()
+	time.Sleep(200 * time.Millisecond)
+	es.Stdin.Write([]byte(testShellInput("echo server_shell_ok")))
+	buf := make([]byte, 4096)
+	var out string
+	// The server's login shell is this host's own — on a developer machine a
+	// PowerShell loading an oh-my-posh profile takes seconds before it reads
+	// stdin, and command bytes typed before that simply sit unread. The
+	// generous budget keeps the assertion about the server's shell choice, not
+	// about profile startup speed.
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(out, "server_shell_ok") {
+		n, _ := es.Stdout.Read(buf)
+		out += string(buf[:n])
+	}
+	if !strings.Contains(out, "server_shell_ok") {
+		t.Fatalf("pty shell with no command should run the server's login shell, got %q", out)
+	}
+}
+
+// A canceled dial must come back with the context's error, promptly, and with
+// nothing left running — not with a transport error from a socket that was torn
+// down from under the handshake, and not after the target's own timeout.
+//
+// The server here accepts the TCP connection and then says nothing: the client
+// is past net.Dial and parked in the handshake, which takes no context of its
+// own. Cancellation therefore has to reach the socket itself, which is the
+// property this pins (see watchCancel). A dialer that only checked ctx before
+// starting would hang here until the test's own patience ran out.
+func TestStartWithConfigCancelDuringHandshake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	// Accept and keep the socket open without ever starting the SSH handshake.
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // held until the listener closes
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	cfg := &ssh.ClientConfig{
+		User:            "nobody",
+		Auth:            []ssh.AuthMethod{ssh.Password("x")},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         30 * time.Second, // long: only the cancel can end this in time
+	}
+	start := time.Now()
+	es, err := StartWithConfig(ctx, ln.Addr().String(), cfg, nil, "", nil, false, 24, 80)
+	if err == nil {
+		es.Close()
+		t.Fatal("a dial canceled mid-handshake succeeded")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error is %v; a canceled dial must report context.Canceled so callers can tell a user's cancel from a network fault", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("cancel took %v; the socket was not closed, so the handshake ran to its own timeout", elapsed)
+	}
+}
+
+// TestWriteStdinGivesUpWhenAnotherWriteStalls pins that stdin writes do not queue
+// behind a stuck network write forever (issue #219).
+//
+// The token is the right to write; a write that blocked in x/crypto holds it, and a
+// second caller must be told so rather than parked. Without the bound, a peer that
+// stopped reading its socket took every later input on the channel with it — and,
+// because teardown also closed stdin under the same mutex, the close path too.
+func TestWriteStdinGivesUpWhenAnotherWriteStalls(t *testing.T) {
+	es := BareClient(nil, false, nil)
+	// Take the token and never return it: this is what a write stuck in the kernel
+	// looks like from the outside.
+	if err := es.acquireStdin(time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	err := es.acquireStdin(150 * time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a second writer got the token while a stuck write still held it")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("the second writer waited %v; it must be bounded", elapsed)
+	}
+	if !strings.Contains(err.Error(), "not queueing behind it") {
+		t.Fatalf("the refusal does not say what happened: %v", err)
+	}
+}
+
+// TestCloseStdinDoesNotQueueBehindAStuckWrite pins the teardown half of the same
+// bug: a close that waits for a stuck write is a close that never happens, and that
+// is what made the whole close path unresponsive (issue #218 through this door).
+func TestCloseStdinDoesNotQueueBehindAStuckWrite(t *testing.T) {
+	es := BareClient(nil, false, nil)
+	es.Stdin = nopWriteCloser{}
+	// Hold the token, as a stuck write does.
+	if err := es.acquireStdin(time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		es.closeStdin()
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("closeStdin blocked on the token a stuck write is holding")
+	}
+}
+
+type nopWriteCloser struct{}
+
+func (nopWriteCloser) Write(b []byte) (int, error) { return len(b), nil }
+func (nopWriteCloser) Close() error                { return nil }

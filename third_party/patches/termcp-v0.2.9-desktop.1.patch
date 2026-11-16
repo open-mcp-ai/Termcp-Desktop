@@ -1,0 +1,386 @@
+--- a/core/core.go
++++ b/core/core.go
+@@ -244,9 +244,9 @@
+ 	return s, nil
+ }
+ 
+-// wireUI mounts the browser UI unless this instance asked for a headless one.
+-// Split out so the headless decision is one readable branch instead of a dozen
+-// conditionals scattered through New.
++// wireUI mounts the management API and, when this build carries the assets,
++// the browser UI. Headless is a runtime choice to hide the browser surface; a
++// no_webui build removes the assets while retaining every API the embedder uses.
+ func (s *Server) wireUI() {
+ 	if s.cfg.Headless {
+ 		// The browser UI is gone, the agent-facing document is not: it is the only
+@@ -256,12 +256,6 @@
+ 		// this one file for the same reason, so the two forms agree.
+ 		s.mux.Handle("/api.md", http.FileServer(http.FS(webui.Assets())))
+ 		slog.Info("browser UI: disabled (headless)")
+-		return
+-	}
+-	if !webui.Embedded() {
+-		// Compiled without the UI: webui.Register mounts /api.md itself (see
+-		// handler.go), so there is nothing to add here.
+-		slog.Info("browser UI: not in this build (no_webui)")
+ 		return
+ 	}
+ 	cfg := s.cfg
+@@ -306,7 +300,13 @@
+ 	h.StopDaemon = func() { s.Close("daemon stop") }
+ 
+ 	s.webui = h
+-	s.uiEnabled = true
++	s.uiEnabled = webui.Embedded()
++	if !s.uiEnabled {
++		// Handler.Register always mounts the backend API. In this build it serves
++		// only /api.md for static content, so the page assets stay excluded while
++		// approval, extension, client and WebSocket wiring remain intact.
++		slog.Info("browser UI: not in this build (no_webui)")
++	}
+ }
+ 
+ // Embedded reports whether the browser UI was mounted.
+--- a/internal/extensions/reconciler.go
++++ b/internal/extensions/reconciler.go
+@@ -458,10 +458,15 @@
+ 		channel: ext.Name,
+ 		command: cmd,
+ 		args:    args,
+-		shell:   ext.Mode != "",
+-		pty:     mode == "pty",
+-		rows:    rows,
+-		cols:    cols,
++		// A URL template always runs the in-process relay on a channel, even when
++		// the author left mode empty. Without that channel /ext/{name}/stream has
++		// nothing to forward JSON-RPC frames to.
++		shell: ext.Mode != "" || ext.URL != "",
++		// The URL relay speaks one JSON-RPC message per line. It is never a PTY:
++		// terminal echo and line editing would corrupt the protocol.
++		pty:  mode == "pty" && ext.URL == "",
++		rows: rows,
++		cols: cols,
+ 	}, nil
+ }
+ 
+--- a/internal/mcp/ext_peer.go
++++ b/internal/mcp/ext_peer.go
+@@ -55,15 +55,23 @@
+ // `open ext` return the peer already mounted instead of dialling a second one.
+ var extPeers sync.Map // key string -> *extPeerEntry
+ 
++// extPeerHandles indexes the public peer address back to the mount that owns it.
++// A direct `call <session> mcp:N` does not pass through `open ext`, so it needs
++// this reverse lookup to reject a mount made from a template that has since
++// changed.
++var extPeerHandles sync.Map // peerKey string -> *extPeerEntry
++
+ // extPeerEntry is one in-flight or completed mount.
+ //
+ // handle/err are written by the creator BEFORE close(ready) and are read only
+ // after <-ready, so the channel close is the happens-before edge and no field
+ // needs a lock of its own.
+ type extPeerEntry struct {
+-	ready  chan struct{}
+-	handle *jrpcHandle
+-	err    string
++	ready     chan struct{}
++	handle    *jrpcHandle
++	err       string
++	name      string
++	sessionID string
+ 	// fp is the template fingerprint this mount was dialled from (issue #282).
+ 	// Written by the creator before close(ready), like handle and err.
+ 	fp string
+@@ -120,12 +128,13 @@
+ 			}
+ 			if entry.handle != nil {
+ 				h := entry.handle
++				extPeerHandles.Store(peerKey(h.sessionID, h.kind, h.index), entry)
+ 				return h, peerKey(h.sessionID, h.kind, h.index), envelope.Slot{}, true
+ 			}
+ 			return nil, "", envelope.Slot{}, true
+ 		}
+ 
+-		entry := &extPeerEntry{ready: make(chan struct{}), fp: fp}
++		entry := &extPeerEntry{ready: make(chan struct{}), fp: fp, name: name, sessionID: sessionID}
+ 		if _, loaded := extPeers.LoadOrStore(key, entry); loaded {
+ 			continue // another caller published first; join its entry
+ 		}
+@@ -157,6 +166,7 @@
+ 			extPeers.CompareAndDelete(key, entry)
+ 			return nil, "", slot, true
+ 		}
++		extPeerHandles.Store(peerKey(h.sessionID, h.kind, h.index), entry)
+ 		return h, handle, slot, true
+ 	}
+ }
+@@ -207,8 +217,38 @@
+ 		return
+ 	}
+ 	if entry.handle != nil {
++		extPeerHandles.Delete(peerKey(entry.handle.sessionID, entry.handle.kind, entry.handle.index))
+ 		s.closeExtPeer(entry.handle)
++	}
++}
++
++// staleExtensionPeer rejects a direct call through a mount whose extension
++// template has changed or disappeared since the peer was dialled.
++func (s *Server) staleExtensionPeer(h *jrpcHandle, stmt directive.Statement) *envelope.Slot {
++	if h == nil || s.extensions == nil {
++		return nil
+ 	}
++	key := peerKey(h.sessionID, h.kind, h.index)
++	v, ok := extPeerHandles.Load(key)
++	if !ok {
++		return nil
++	}
++	entry, _ := v.(*extPeerEntry)
++	if entry == nil {
++		return nil
++	}
++	ext, err := s.extensions.Store().Load(entry.name)
++	if err == nil && ext.Fingerprint() == entry.fp {
++		return nil
++	}
++	s.unmountExtPeer(entry.sessionID, entry.name)
++	reason := "was changed"
++	if err != nil {
++		reason = "was removed"
++	}
++	return &envelope.Slot{Code: 409, Headers: map[string]string{
++		"Path": stmt.Path, "Error-Code": "extension_changed",
++	}, Body: fmt.Sprintf("extension %q %s after this peer was mounted. Open the extension again to use its current URL and headers", entry.name, reason)}
+ }
+ 
+ // closeExtPeer drops a mounted peer from the registry and closes its connection.
+--- a/internal/mcp/term_peer.go
++++ b/internal/mcp/term_peer.go
+@@ -250,6 +250,9 @@
+ 		}
+ 		h = found
+ 	}
++	if stale := s.staleExtensionPeer(h, stmt); stale != nil {
++		return []envelope.Slot{*stale}
++	}
+ 
+ 	// THE WINDOW IS THIS SIDE'S OWN DEADLINE (#158). Without it the only bound on a
+ 	// peer call is the caller's context, which belongs to a host watchdog this daemon
+--- a/internal/mcp/term_render.go
++++ b/internal/mcp/term_render.go
+@@ -264,20 +264,15 @@
+ 		name := getString(item, "name", "")
+ 		state := getString(item, "status", "")
+ 		handle := getString(item, "session_id", "")
+-		if shell := getString(item, "shell_id", ""); shell != "" {
++		if peer := s.extPeerHandleOf(getString(item, "session_id", ""), name); peer != "" {
++			// A URL extension now has a relay channel too, but the address a caller
++			// needs after `open ext` is the MCP peer, not the private line channel.
++			handle = peer
++		} else if shell := getString(item, "shell_id", ""); shell != "" {
+ 			// The address when it can be derived, the id otherwise: a shell-less
+ 			// extension (an SFTP-only window) has no channel and reports its
+ 			// session, which is exactly the address a file read takes.
+ 			handle = s.addressOf(getString(item, "session_id", ""), shell)
+-		} else if peer := s.extPeerHandleOf(getString(item, "session_id", ""), name); peer != "" {
+-			// AN ENDPOINT EXTENSION HAS NO CHANNEL BUT DOES HAVE AN ADDRESS (issue #271).
+-			//
+-			// It is mounted as a real MCP peer, so the thing a caller types next is
+-			// `call <session> mcp:1 <tool> {…}` — and this column is the one place a
+-			// caller that lost its context can recover that address. Falling back to the
+-			// bare session id left the column claiming a handle that no `call` accepts,
+-			// so the only way back was to run `open ext` again.
+-			handle = peer
+ 		}
+ 		notes := strings.ReplaceAll(getString(item, "notes", ""), "\n", " ")
+ 		if len(notes) > 60 {
+--- a/internal/mcp/ext_peer_fingerprint_test.go
++++ b/internal/mcp/ext_peer_fingerprint_test.go
+@@ -94,6 +94,10 @@
+ 	}); !strings.HasPrefix(got, "TERM/1 200") {
+ 		t.Fatalf("edit ext failed:\n%s", got)
+ 	}
++	staleBeforeOpen := termText(t, s, map[string]any{"cmd": `call ` + stale + ` ping {}`, "timeout": 5})
++	if strings.HasPrefix(staleBeforeOpen, "TERM/1 200") {
++		t.Fatalf("the stale peer remained callable immediately after the template changed:\n%s", staleBeforeOpen)
++	}
+ 
+ 	// 3. THE ASSERTION: the next open speaks with the new header, with no
+ 	//    intervening `close ext`. Before the fix this returned the same stale peer
+--- a/internal/mcp/handlers_test.go
++++ b/internal/mcp/handlers_test.go
+@@ -10,6 +10,7 @@
+ 	"testing"
+ 	"time"
+ 
++	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
+ 	"github.com/open-mcp-ai/termcp/internal/message"
+ 	"github.com/open-mcp-ai/termcp/internal/session"
+ 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+@@ -23,6 +24,7 @@
+ func startTestSSH(t *testing.T) *sshserver.Server {
+ 	t.Helper()
+ 	srv := sshserver.New()
++	mcpbridge.RegisterBuiltin(srv, nil)
+ 	if err := srv.Start(); err != nil {
+ 		t.Fatal(err)
+ 	}
+--- /dev/null
++++ b/core/no_webui_test.go
+@@ -0,0 +1,91 @@
++//go:build no_webui
++
++package core
++
++import (
++	"context"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"github.com/gorilla/websocket"
++	"github.com/open-mcp-ai/termcp/config"
++)
++
++func TestNoWebUIBuildRetainsManagementAPI(t *testing.T) {
++	cfg := config.Default()
++	cfg.DataDir = t.TempDir()
++	srv, err := New(Options{Config: cfg, Version: "v0.2.9"})
++	if err != nil {
++		t.Fatalf("New: %v", err)
++	}
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start: %v", err)
++	}
++	t.Cleanup(func() { srv.Close("probe done") })
++
++	for _, path := range []string{"/api.md", "/api/version", "/api/sessions", "/api/extensions", "/api/approvals", "/api/clients"} {
++		rec := httptest.NewRecorder()
++		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
++		if rec.Code != http.StatusOK {
++			t.Errorf("GET %s = %d, want 200", path, rec.Code)
++		}
++	}
++	for _, path := range []string{"/", "/static/app.js", "/themes/default.css", "/vendor/xterm/xterm.js"} {
++		rec := httptest.NewRecorder()
++		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
++		if rec.Code != http.StatusNotFound {
++			t.Errorf("GET %s = %d, want 404", path, rec.Code)
++		}
++	}
++	recWebSocket := httptest.NewRecorder()
++	srv.Handler().ServeHTTP(recWebSocket, httptest.NewRequest(http.MethodGet, "/api/ui/ws", nil))
++	if recWebSocket.Code != http.StatusBadRequest {
++		t.Errorf("GET /api/ui/ws without Upgrade = %d, want 400", recWebSocket.Code)
++	}
++
++	rec := httptest.NewRecorder()
++	body := strings.NewReader(`{"cmd":"ls ext"}`)
++	req := httptest.NewRequest(http.MethodPost, "/api/term", body)
++	req.Header.Set("Content-Type", "application/json")
++	srv.Handler().ServeHTTP(rec, req)
++	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"code":200`) {
++		t.Fatalf("POST /api/term ls ext = %d %s", rec.Code, strings.TrimSpace(rec.Body.String()))
++	}
++
++	reply := srv.Term(context.Background(), "ls ext", nil)
++	if len(reply.Slots) == 0 {
++		t.Fatal("ls ext returned no slots")
++	}
++	if reply.Slots[0].Code != http.StatusOK {
++		t.Fatalf("Term(ls ext) = %d %s", reply.Slots[0].Code, reply.Slots[0].Body)
++	}
++	if srv.Embedded() {
++		t.Fatal("no_webui build reports the browser UI as embedded")
++	}
++	if srv.webui == nil {
++		t.Fatal("no_webui build did not construct the management handler")
++	}
++	if srv.webui.ExecuteOperation == nil {
++		t.Fatal("approval execution callback is not wired")
++	}
++
++	ts := httptest.NewServer(srv.Handler())
++	t.Cleanup(ts.Close)
++	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/ui/ws"
++	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
++	if err != nil {
++		t.Fatalf("connect /api/ui/ws: %v", err)
++	}
++	defer conn.Close()
++	var event struct {
++		Type string `json:"type"`
++	}
++	if err := conn.ReadJSON(&event); err != nil {
++		t.Fatalf("read initial WebSocket event: %v", err)
++	}
++	if event.Type != "sessions" {
++		t.Fatalf("initial WebSocket event = %q, want sessions", event.Type)
++	}
++}
+--- /dev/null
++++ b/internal/extensions/url_relay_shell_test.go
+@@ -0,0 +1,62 @@
++package extensions
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++)
++
++func TestURLTemplateCreatesRelayChannelWithoutExplicitMode(t *testing.T) {
++	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var env map[string]any
++		_ = json.NewDecoder(r.Body).Decode(&env)
++		id := env["id"]
++		w.Header().Set("Content-Type", "application/json")
++		switch env["method"] {
++		case "initialize":
++			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{
++				"protocolVersion": "2024-11-05",
++				"serverInfo":      map[string]any{"name": "relay-test", "version": "1"},
++				"capabilities":    map[string]any{"tools": map[string]any{}},
++			}})
++		case "tools/list":
++			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{
++				"tools": []any{map[string]any{"name": "ping", "inputSchema": map[string]any{"type": "object"}}},
++			}})
++		default:
++			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{}})
++		}
++	}))
++	defer upstream.Close()
++
++	reconciler := startReconciler(t)
++
++	ext := &Extension{
++		Name:   "url-without-mode",
++		Target: "internal",
++		URL:    upstream.URL,
++	}
++	if err := SaveStruct(reconciler.Store(), ext); err != nil {
++		t.Fatal(err)
++	}
++	status, err := reconciler.Acquire(ext.Name, 5*time.Second)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if status.SessionID == "" || status.ShellID == "" {
++		t.Fatalf("URL relay status has no channel: %+v", status)
++	}
++	sess := reconciler.sessMgr.Get(status.SessionID)
++	if sess == nil {
++		t.Fatal("URL relay session is missing")
++	}
++	shell := sess.GetChildShell(status.ShellID)
++	if shell == nil {
++		t.Fatal("URL relay channel is not reachable through its session")
++	}
++	if got := shell.Info().Mode; got != "pipe" {
++		t.Fatalf("URL relay mode = %q, want pipe", got)
++	}
++}

@@ -86,19 +86,42 @@ type ExtensionForward struct {
 	TargetAddr string `json:"target_addr,omitempty"`
 }
 
-type Extension struct {
-	Name        string             `json:"name"`
-	Kind        string             `json:"kind,omitempty"`
-	Target      string             `json:"target,omitempty"`
-	Description string             `json:"description,omitempty"`
-	Enabled     bool               `json:"enabled"`
+type ExtensionTargetStatus struct {
+	Target      string             `json:"target"`
 	Status      string             `json:"status"`
-	URL         string             `json:"url,omitempty"`
 	SessionID   string             `json:"session_id,omitempty"`
 	ShellID     string             `json:"shell_id,omitempty"`
 	Forwards    []ExtensionForward `json:"forwards,omitempty"`
-	Failure     *ExtensionFailure  `json:"failure,omitempty"`
-	NextRetryMs int64              `json:"next_retry_ms,omitempty"`
+	NextRetryMs int64              `json:"next_retry,omitempty"`
+}
+
+type ExtensionHole struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Help  string `json:"help,omitempty"`
+	Set   bool   `json:"set"`
+	Value any    `json:"value,omitempty"`
+}
+
+type Extension struct {
+	Name          string                  `json:"name"`
+	Target        string                  `json:"target,omitempty"`
+	Targets       []ExtensionTargetStatus `json:"targets,omitempty"`
+	Description   string                  `json:"description,omitempty"`
+	Enabled       bool                    `json:"enabled"`
+	Status        string                  `json:"status"`
+	URL           string                  `json:"url,omitempty"`
+	SessionID     string                  `json:"session_id,omitempty"`
+	ShellID       string                  `json:"shell_id,omitempty"`
+	Forwards      []ExtensionForward      `json:"forwards,omitempty"`
+	Failure       *ExtensionFailure       `json:"failure,omitempty"`
+	NextRetryMs   int64                   `json:"next_retry_ms,omitempty"`
+	HostCount     int                     `json:"host_count"`
+	ForwardCount  int                     `json:"forward_count"`
+	Holes         []ExtensionHole         `json:"holes,omitempty"`
+	Needs         []string                `json:"needs,omitempty"`
+	IdleTimeoutMs int64                   `json:"idle_timeout_ms,omitempty"`
+	IdleForMs     int64                   `json:"idle_for_ms,omitempty"`
 }
 
 type Snapshot struct {

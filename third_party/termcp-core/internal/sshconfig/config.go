@@ -1,0 +1,391 @@
+package sshconfig
+
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+
+	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sshclient"
+)
+
+const maxConfigFileSize = 256 * 1024
+
+const KindInternal = "internal"
+const KindRemote = "remote"
+
+var nameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+
+// DialSpec holds the dial-time SSH fields shared by a remote Entry and a JumpSpec.
+// It is embedded with toml:",squash" so TOML keys stay flat (host = ..., not [dialspec]).
+type DialSpec struct {
+	Host               string `toml:"host,omitempty"`
+	Port               int    `toml:"port,omitempty"`
+	User               string `toml:"user,omitempty"`
+	Password           string `toml:"password,omitempty"`
+	PrivateKey         string `toml:"private_key,omitempty"`
+	KeyPassphrase      string `toml:"key_passphrase,omitempty"`
+	TrustUnknownHost   *bool  `toml:"trust_unknown_host,omitempty"`
+	KnownHosts         string `toml:"known_hosts,omitempty"`
+	DialTimeoutSeconds int    `toml:"dial_timeout_seconds,omitempty"`
+	Proxy              string `toml:"proxy,omitempty"` // e.g. "socks5://user:pass@host:port"
+}
+
+// Entry is stored as data-dir/ssh_configs/<name>/config.toml
+type Entry struct {
+	Kind         string `toml:"kind"` // "internal" | "remote"
+	Description  string `toml:"description,omitempty"`
+	DefaultShell string `toml:"default_shell,omitempty"`
+	DefaultMode  string `toml:"default_mode,omitempty"`
+	// DefaultApproval makes every session created from this profile start with
+	// review mode on. It is a property of the connection because the decision is
+	// about the host, not about one session: a production box is the reason to
+	// want every write reviewed, and remembering to flip the switch after each
+	// `termcp://entry` launch is exactly the step that gets forgotten.
+	DefaultApproval bool `toml:"default_approval,omitempty"`
+	DialSpec        `toml:",squash"`
+	Jump            *JumpSpec `toml:"jump,omitempty"` // optional bastion chain (ProxyJump)
+}
+
+// JumpSpec is a self-contained bastion hop: a DialSpec plus a nested Jump for
+// multi-hop chains. It lacks Entry's session-level fields (kind/shell/mode) —
+// only the final target runs a shell. Stored inline so the config is
+// self-contained at the cost of duplicated bastion credentials across entries.
+type JumpSpec struct {
+	DialSpec `toml:",squash"`
+	Jump     *JumpSpec `toml:"jump,omitempty"`
+}
+
+// ValidateName checks directory/config id (reserved: internal is allowed as id).
+func ValidateName(name string) error {
+	name = strings.TrimSpace(name)
+	if !nameRe.MatchString(name) {
+		return fmt.Errorf("invalid ssh config name %q (letters, digits, _, -; max 64)", name)
+	}
+	return nil
+}
+
+// ParseAndValidate decodes TOML and validates by kind.
+// quoteKeys renders the undecoded key list the way the caller wrote it, so the
+// message can be pasted back into the file: `"privat_key"` reads as a location,
+// `privat_key` reads as prose.
+func quoteKeys(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = strconv.Quote(n)
+	}
+	if len(q) == 1 {
+		return "the key " + q[0]
+	}
+	return "the keys " + strings.Join(q[:len(q)-1], ", ") + " and " + q[len(q)-1]
+}
+
+func ParseAndValidate(data []byte) (*Entry, error) {
+	if len(data) > maxConfigFileSize {
+		return nil, fmt.Errorf("config file too large (max %d bytes)", maxConfigFileSize)
+	}
+	var e Entry
+	// A MISSING KEY IS NOT A TYPO, BUT AN UNKNOWN ONE IS (issue #249.4).
+	//
+	// TOML decoding drops keys the struct does not name, so `privat_key = "..."` or
+	// `trust_unkown_host = true` parses cleanly, produces a zero value, and fails later
+	// at dial time as "unable to authenticate" — a message that describes the symptom
+	// and hides the edit. Metadata.Undecoded() is the decoder's own list of keys it did
+	// not map, which is exactly the caller's typo list.
+	//
+	// It names the keys rather than saying "unknown field": the caller's next action is
+	// to fix these words, and every key named here is one they wrote.
+	md, err := toml.Decode(string(data), &e)
+	if err != nil {
+		return nil, fmt.Errorf("config toml: %w", err)
+	}
+	if und := md.Undecoded(); len(und) > 0 {
+		names := make([]string, len(und))
+		for i, k := range und {
+			names[i] = k.String()
+		}
+		return nil, fmt.Errorf("config has %s that nothing reads, so the value is ignored: %w",
+			quoteKeys(names), ErrInvalid)
+	}
+	k := strings.TrimSpace(strings.ToLower(e.Kind))
+	if k == "" {
+		// ErrInvalid, not a bare error: a profile with no kind is the CALLER's
+		// document being incomplete, and answering it with operation_failed (500)
+		// reads like an outage — a caller that retries on 5xx retries a config that
+		// will never work.
+		return nil, fmt.Errorf("config must set \"kind\" to %q or %q: %w", KindInternal, KindRemote, ErrInvalid)
+	}
+	e.Kind = k
+	switch k {
+	case KindInternal:
+		// A DIAL FIELD ON AN INTERNAL PROFILE DOES NOTHING, AND SAYING SO IS THE FIX.
+		// `kind = "internal"` means the built-in loopback connection; host/user/port
+		// beside it parse cleanly, are never read, and the session connects to
+		// localhost anyway. That is the one combination where the caller's mental
+		// model and reality diverge with no signal at all: they believe they are
+		// reaching 10.99.99.99.
+		if err := refuseDialFieldsOnInternal(&e); err != nil {
+			return nil, err
+		}
+		if err := validateDefaultMode(&e); err != nil {
+			return nil, err
+		}
+		return &e, nil
+	case KindRemote:
+		if err := validateDialSpec(&e.DialSpec, "remote config"); err != nil {
+			return nil, err
+		}
+		if err := validateJump(e.Jump); err != nil {
+			return nil, err
+		}
+		if err := validateDefaultMode(&e); err != nil {
+			return nil, err
+		}
+		return &e, nil
+	default:
+		return nil, fmt.Errorf("unknown kind %q (use %q or %q): %w", e.Kind, KindInternal, KindRemote, ErrInvalid)
+	}
+}
+
+// refuseDialFieldsOnInternal rejects a loopback profile that carries dial settings.
+//
+// Names the fields rather than saying "unexpected field": the caller has to delete
+// them, and "host, user, port" is the edit list.
+func refuseDialFieldsOnInternal(e *Entry) error {
+	var found []string
+	if strings.TrimSpace(e.Host) != "" {
+		found = append(found, "host")
+	}
+	if strings.TrimSpace(e.User) != "" {
+		found = append(found, "user")
+	}
+	if e.Port != 0 {
+		found = append(found, "port")
+	}
+	if strings.TrimSpace(e.Password) != "" {
+		found = append(found, "password")
+	}
+	if strings.TrimSpace(e.PrivateKey) != "" {
+		found = append(found, "private_key")
+	}
+	if e.Jump != nil {
+		found = append(found, "jump")
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	return fmt.Errorf("kind = %q is the built-in loopback connection, so %s would be accepted and ignored; remove it or use kind = %q: %w",
+		KindInternal, strings.Join(found, ", "), KindRemote, ErrInvalid)
+}
+
+func validateDefaultMode(e *Entry) error {
+	dm := strings.TrimSpace(strings.ToLower(e.DefaultMode))
+	if dm == "" {
+		e.DefaultMode = ""
+		return nil
+	}
+	if dm != "pty" && dm != "pipe" {
+		return fmt.Errorf("default_mode must be \"pty\" or \"pipe\", got %q: %w", e.DefaultMode, ErrInvalid)
+	}
+	e.DefaultMode = dm
+	return nil
+}
+
+// validateDialSpec checks the shared dial fields. label prefixes error messages
+// (e.g. "remote config", `jump "host"`).
+func validateDialSpec(d *DialSpec, label string) error {
+	d.Host = strings.TrimSpace(d.Host)
+	d.User = strings.TrimSpace(d.User)
+	if d.Host == "" {
+		return fmt.Errorf("%s must set \"host\": %w", label, ErrInvalid)
+	}
+	if d.User == "" {
+		return fmt.Errorf("%s must set \"user\": %w", label, ErrInvalid)
+	}
+	d.Password = strings.TrimSpace(d.Password)
+	d.PrivateKey = strings.TrimSpace(d.PrivateKey)
+	if d.Password == "" && d.PrivateKey == "" {
+		return fmt.Errorf("%s needs password or private_key: %w", label, ErrInvalid)
+	}
+	if d.Port < 0 || d.Port > 65535 {
+		return fmt.Errorf("%s invalid port %d: %w", label, d.Port, ErrInvalid)
+	}
+	if _, err := sshclient.ParseProxyURL(d.Proxy); err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	// A TIMEOUT ABOVE THE CAP IS NOT A TIMEOUT, and a negative one is a typo. Zero stays
+	// legal and means "the default" (an entry written before this field existed has no value
+	// at all); anything else has to be inside the range the dialler honours, or the caller is
+	// setting a number that will be replaced without a word at dial time.
+	//
+	// A SHORT TIMEOUT IS LEGAL. The floor is 1 second, not the 30 second default: failing
+	// fast is a legitimate thing to ask for, and refusing it would leave a script with no way
+	// to bound a dial. The dialler owns the range (session.ClampDialTimeoutSeconds) and this
+	// asks it rather than restating the numbers — two copies of a bound drift apart, and the
+	// copy that drifts is always the one that is not enforcing anything.
+	// NEGATIVE IS REFUSED; EVERYTHING ELSE IS THE CALLER'S NUMBER.
+	//
+	// A dial timeout above the recommendation is a request this server has no basis to
+	// overrule — a slow link or a long bastion chain is a real reason to want one — so it
+	// is stored and honoured. Below zero is a typo, not a wish, and it is the one value
+	// the dialler has to replace to have anything to do at all.
+	if d.DialTimeoutSeconds < 0 {
+		return fmt.Errorf("%s dial_timeout_seconds must not be negative, got %d "+
+			"(0 means the default, %ds; %ds is the value to stay under): %w",
+			label, d.DialTimeoutSeconds, session.DefaultDialTimeoutSeconds,
+			session.RecommendedDialTimeoutSeconds, ErrInvalid)
+	}
+	return nil
+}
+
+// validateJump recursively validates a bastion chain. nil = no jump.
+func validateJump(j *JumpSpec) error {
+	if j == nil {
+		return nil
+	}
+	j.Host = strings.TrimSpace(j.Host)
+	label := fmt.Sprintf("jump %q", j.Host)
+	if err := validateDialSpec(&j.DialSpec, label); err != nil {
+		return err
+	}
+	return validateJump(j.Jump)
+}
+
+// EffectiveCommand resolves command+args when the client sends nothing.
+// If the client provides a non-empty command or any args, ent is ignored for the command.
+func EffectiveCommand(ent *Entry, cmd string, args []string) (string, []string) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd != "" || len(args) > 0 {
+		return cmd, args
+	}
+	if ent != nil {
+		ds := strings.TrimSpace(ent.DefaultShell)
+		if ds != "" {
+			f := strings.Fields(ds)
+			if len(f) > 0 {
+				return f[0], f[1:]
+			}
+		}
+	}
+	return "", nil
+}
+
+// EffectiveDefaultShell returns the profile's default shell line (may carry
+// arguments), or "" when the profile sets none. A session keeps this so shells
+// opened later on the same connection resolve their shell the same way the
+// first one did: caller's command, then the profile, then the server's own.
+func EffectiveDefaultShell(ent *Entry) string {
+	if ent == nil {
+		return ""
+	}
+	return strings.TrimSpace(ent.DefaultShell)
+}
+
+// EffectiveMode returns pty or pipe; default is pty unless ent.DefaultMode overrides when mode is empty.
+func EffectiveMode(ent *Entry, mode string) string {
+	m := strings.TrimSpace(strings.ToLower(mode))
+	if m != "" {
+		return m
+	}
+	if ent != nil {
+		dm := strings.TrimSpace(strings.ToLower(ent.DefaultMode))
+		if dm == "pty" || dm == "pipe" {
+			return dm
+		}
+	}
+	return "pty"
+}
+
+// EffectiveApproval reports whether a session created from ent starts gated.
+//
+// A nil entry (no profile, or one that failed to load) is not gated: the field
+// can only say "on" for a profile that was actually read, so a missing profile
+// cannot silently gate a session whose owner never asked for it. A caller that
+// wants the safe answer when a profile is missing must say so itself.
+func EffectiveApproval(ent *Entry) bool {
+	return ent != nil && ent.DefaultApproval
+}
+
+// InternalTemplate is the built-in loopback SSH entry.
+func InternalTemplate() []byte {
+	return []byte("# termcp loopback SSH config (TOML)\nkind = \"internal\"\ndescription = \"Built-in termcp loopback SSH (no host credentials).\"\n")
+}
+
+// ParseInternalOverride layers a stored internal config over the built-in
+// defaults.
+//
+// The point of layering rather than replacing: the internal profile has real
+// defaults (its kind, its description) that a user setting one field should not
+// have to restate. TOML decoding only writes the keys the document actually
+// contains, so starting from the template gives "absent key keeps the default,
+// present key overrides it" for free — which is exactly the rule a config file
+// is expected to follow.
+func ParseInternalOverride(data []byte, base *Entry) (*Entry, error) {
+	if len(data) > maxConfigFileSize {
+		return nil, fmt.Errorf("config file too large (max %d bytes)", maxConfigFileSize)
+	}
+	e := *base
+	if err := toml.Unmarshal(data, &e); err != nil {
+		return nil, fmt.Errorf("config toml: %w", err)
+	}
+	k := strings.TrimSpace(strings.ToLower(e.Kind))
+	if k != KindInternal {
+		// A stored override for the loopback profile cannot turn it into a
+		// remote one: the name means the built-in connection, and silently
+		// honouring kind="remote" here would make "internal" dial elsewhere.
+		return nil, fmt.Errorf("the internal profile must keep kind = %q, got %q", KindInternal, k)
+	}
+	e.Kind = KindInternal
+	if err := refuseDialFieldsOnInternal(&e); err != nil {
+		return nil, err
+	}
+	if err := validateDefaultMode(&e); err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// RemoteFromEntry converts an sshconfig Entry into session.RemoteSSH dial settings,
+// including the recursive bastion chain from Entry.Jump.
+func RemoteFromEntry(e *Entry, configDir string) (*session.RemoteSSH, error) {
+	r := dialSpecToRemote(&e.DialSpec)
+	r.Jump = jumpToRemote(e.Jump)
+	return r, nil
+}
+
+func dialSpecToRemote(d *DialSpec) *session.RemoteSSH {
+	pem := strings.TrimSpace(d.PrivateKey)
+	trust := true
+	if d.TrustUnknownHost != nil {
+		trust = *d.TrustUnknownHost
+	}
+	port := d.Port
+	if port == 0 {
+		port = 22
+	}
+	proxy, _ := sshclient.ParseProxyURL(d.Proxy) // validated upstream by ParseAndValidate
+	return &session.RemoteSSH{
+		Host:               d.Host,
+		Port:               port,
+		User:               d.User,
+		Password:           d.Password,
+		PrivateKey:         pem,
+		KeyPassphrase:      d.KeyPassphrase,
+		TrustUnknownHost:   trust,
+		KnownHosts:         d.KnownHosts,
+		DialTimeoutSeconds: d.DialTimeoutSeconds,
+		Proxy:              proxy,
+	}
+}
+
+func jumpToRemote(j *JumpSpec) *session.RemoteSSH {
+	if j == nil {
+		return nil
+	}
+	r := dialSpecToRemote(&j.DialSpec)
+	r.Jump = jumpToRemote(j.Jump)
+	return r
+}

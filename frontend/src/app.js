@@ -31,7 +31,7 @@ import { integrationPage } from './features/integrations/view.js';
 import { ObservabilityController } from './features/observability/controller.js';
 import { observabilityPage } from './features/observability/view.js';
 import { ExtensionController, readExtensionImport } from './features/extensions/controller.js';
-import { extensionPayload, formFromExtensionDetail, formValues, importFailureReport, importReport, isExtensionNamespace, userSessions } from './features/extensions/model.js';
+import { extensionPayload, formFromExtensionDetail, formValues, importFailureReport, importReport, isExtensionNamespace, parseValuesDocument, userSessions, valuesFromHoles } from './features/extensions/model.js';
 import { extensionEditorOpen, extensionsPage } from './features/extensions/view.js';
 import { inspectorBody, inspectorShell } from './features/inspector/view.js';
 import { activateInspectorShell, followShellDirectory, performFileUpload, rememberInspectorPath } from './features/inspector/controller.js';
@@ -603,15 +603,14 @@ async function importHostConfigurations(password) {
 
 function captureExtensionEditor(form, dialog = state.dialog) {
   if (!dialog || dialog.type !== 'extension' || !form) return;
-  if (dialog.mode === 'toml') {
-    dialog.toml = String(new FormData(form).get('toml') || '');
-    return;
-  }
+  const raw = new FormData(form);
+  dialog.toml = String(raw.get('toml') || '');
+  dialog.values = String(raw.get('values') || '');
   const values = formValues(form);
   dialog.form = {
     name: values.name,
-    kind: values.kind,
     target: values.target,
+    targets: values.targets,
     description: values.description,
     enabled: values.enabled,
     mode: values.mode,
@@ -622,6 +621,8 @@ function captureExtensionEditor(form, dialog = state.dialog) {
     allow: values.allow,
     paths: values.paths,
     idleTimeout: values.idleTimeout,
+    resident: values.resident,
+    termcpTool: values.termcpTool,
     notes: values.notes,
     forwards: values.forwards,
   };
@@ -636,6 +637,10 @@ async function openExtensionEditor(name = '') {
     if (!state.dialog || state.dialog.type !== 'extension' || state.dialog.original !== name) return;
     state.dialog.form = formFromExtensionDetail(detail, toml);
     state.dialog.toml = toml;
+    state.dialog.holes = Array.isArray(detail.holes) ? detail.holes : [];
+    state.dialog.values = valuesFromHoles(state.dialog.holes);
+    state.dialog.valuesDirty = false;
+    state.dialog.mode = 'toml';
     state.dialog.status = detail.extension || state.extensions.find(item => item.name === name) || null;
     state.dialog.failures = Array.isArray(detail.failures) ? detail.failures : [];
   } catch (error) {
@@ -678,6 +683,41 @@ async function exportExtensions() {
     if (destination) toast('Extension templates exported', 'success');
   } catch (error) {
     toast(String(error), 'error');
+  }
+}
+
+async function exportTermcpSkill() {
+  try {
+    const destination = await core.exportTermcpSkill();
+    if (destination) toast('HTTP skill exported', 'success');
+  } catch (error) {
+    toast(String(error), 'error');
+  }
+}
+
+async function previewExtension() {
+  const dialog = state.dialog;
+  if (!dialog || dialog.type !== 'extension' || !dialog.original) return;
+  const form = document.querySelector('.extension-editor-modal form');
+  if (!form) return;
+  captureExtensionEditor(form, dialog);
+  dialog.saving = true;
+  dialog.result = '';
+  render();
+  try {
+    dialog.values = String(dialog.values || '');
+    const values = parseValuesDocument(dialog.values);
+    if (dialog.valuesDirty) {
+      await extensionAPI.saveValues(dialog.original, values);
+      dialog.valuesDirty = false;
+    }
+    dialog.preview = await extensionAPI.preview(dialog.original, dialog.toml);
+    dialog.result = 'Preview rendered with saved installation values.';
+  } catch (error) {
+    dialog.result = String(error);
+  } finally {
+    dialog.saving = false;
+    render();
   }
 }
 
@@ -976,7 +1016,10 @@ document.addEventListener('click', async event => {
   if (action === 'open-extension') { await openExtensionTerminal(target.dataset.name, target.dataset.session, target.dataset.shell); return; }
   if (action === 'import-extensions') { document.querySelector('[data-extension-import-file]')?.click(); return; }
   if (action === 'export-extensions') { await exportExtensions(); return; }
+  if (action === 'export-termcp-skill') { await exportTermcpSkill(); return; }
   if (action === 'dismiss-extension-import') { state.extensionImport = null; render(); return; }
+  if (action === 'preview-extension') { await previewExtension(); return; }
+  if (action === 'dismiss-extension-preview') { if (state.dialog?.type === 'extension') state.dialog.preview = ''; render(); return; }
   if (action === 'open-service-details') { state.section = 'settings'; state.settingsView = 'service'; state.selected = { type: 'settings', id: '' }; render(); return; }
   if (action === 'settings-overview') { state.settingsView = 'overview'; render(); return; }
   if (action === 'refresh') { await refresh(); return; }
@@ -1075,6 +1118,7 @@ window.addEventListener('resize', () => {
 document.addEventListener('input', event => {
   if (event.target.matches('[data-filter]')) { state.filter = event.target.value; const treeElement = document.querySelector('.tree-scroll'); if (treeElement) { treeElement.innerHTML = tree(state.filter.trim().toLowerCase()); localizeDOM(treeElement); } }
   if (event.target.matches('[data-history-query]')) state.historyQuery = event.target.value;
+  if (event.target.matches('[name="values"]') && state.dialog?.type === 'extension') state.dialog.valuesDirty = true;
 });
 
 document.addEventListener('change', async event => {
@@ -1313,9 +1357,10 @@ document.addEventListener('submit', async event => {
       const original = dialog.original;
       const name = String(dialog.form.name || '').trim();
       if (!name) throw new Error('Name is required');
-      if (dialog.mode === 'toml') {
+      if (dialog.mode === 'toml' || dialog.mode === 'values' || original) {
         if (!String(dialog.toml || '').trim()) throw new Error('TOML document is empty');
-        await extensionAPI.saveTOML(original, name, dialog.toml);
+        const values = dialog.valuesDirty ? parseValuesDocument(dialog.values) : undefined;
+        await extensionAPI.saveTOML(original, name, dialog.toml, values);
       } else {
         const payload = extensionPayload(dialog.form, { create: !original });
         await extensionAPI.saveForm(original, name, payload);

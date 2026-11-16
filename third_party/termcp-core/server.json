@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.open-mcp-ai/termcp",
+  "description": "An MCP server that lets AI agents act like a human at a real terminal, local or over SSH.",
+  "repository": {
+    "url": "https://github.com/open-mcp-ai/termcp",
+    "source": "github"
+  },
+  "version": "0.2.9",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/open-mcp-ai/termcp:0.2.9",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:18765/stream"
+      }
+    }
+  ]
+}

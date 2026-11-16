@@ -1,0 +1,106 @@
+package mcp
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+
+	"github.com/open-mcp-ai/termcp/mcp"
+
+	"github.com/open-mcp-ai/termcp/internal/forward"
+	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+)
+
+// errMissingSSHConfig is returned when the caller omits ssh_config.
+// session_start deliberately refuses to fall back to a default profile so a
+// forgotten ssh_config cannot silently open a shell on the wrong host.
+var errMissingSSHConfig = errors.New("ssh_config is required")
+
+// errInvalidResourceLocator is returned when ssh_config is written in termcp://
+// syntax but is malformed, or names a session/shell instead of an entry.
+var errInvalidResourceLocator = errors.New("invalid resource locator")
+
+// sshConfigErrCode maps an ssh_config store failure onto its tool error code.
+func sshConfigErrCode(err error) string {
+	if errors.Is(err, errMissingSSHConfig) || errors.Is(err, errInvalidResourceLocator) {
+		return CodeInvalidArgument
+	}
+	if errors.Is(err, sshconfig.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+		return CodeSSHConfigNotFound
+	}
+	// A profile the caller wrote badly is their argument, not a server fault: a
+	// missing host or credential answered 500 operation_failed, which reads like an
+	// outage and invites a retry that cannot succeed.
+	if errors.Is(err, sshconfig.ErrInvalid) {
+		return CodeInvalidArgument
+	}
+	return CodeOperationFailed
+}
+
+// forwardErrCode maps a forward-manager failure onto its tool error code.
+func forwardErrCode(err error) string {
+	if errors.Is(err, forward.ErrNotFound) {
+		return CodeForwardNotFound
+	}
+	return CodeOperationFailed
+}
+
+// Tool error codes. Like a function's (value, error) return, a failed tool
+// result carries a dedicated machine-readable status so callers can branch on
+// the failure kind instead of string-matching the message. Codes are stable
+// snake_case identifiers; success results never carry one.
+const (
+	CodeInvalidArgument     = "invalid_argument"
+	CodeSessionNotFound     = "session_not_found"
+	CodeShellNotFound       = "shell_not_found"
+	CodeSessionNotRunning   = "session_not_running"
+	CodeReaderNotRegistered = "reader_not_registered"
+	CodeHistoryNotFound     = "history_not_found"
+	CodeForwardNotFound     = "forward_not_found"
+	// CodeFileNotFound is a filesystem path that does not exist. It is a 404 like the
+	// other not-found codes: the request named something that is not there, which is
+	// an ordinary answer rather than a server fault.
+	CodeFileNotFound      = "file_not_found"
+	CodeSSHConfigNotFound = "ssh_config_not_found"
+	CodeRuleNotFound      = "rule_not_found"
+	CodeConflict          = "conflict"
+	CodeNotConfigured     = "not_configured"
+	CodeConnectionFailed  = "connection_failed"
+	// CodeForbidden is what a restricted (extension) session returns when a tool
+	// or path is outside the whitelist its template defined. It is a policy
+	// refusal, not a missing object: the session exists and is running, the call
+	// is simply not one this session was created to serve.
+	CodeForbidden       = "forbidden"
+	CodeOperationFailed = "operation_failed"
+	CodeInternalError   = "internal_error"
+)
+
+// toolError builds a failed tool result whose text content is a JSON object
+// with a dedicated error_code field plus a human-readable message:
+//
+//	{"error_code":"shell_not_found","error":"Shell 'abc' not found"}
+//
+// The dedicated field lets agents branch on the failure kind (the moral
+// equivalent of a typed error) without parsing prose. Only failed results
+// carry it; success results keep their normal payload.
+func toolError(code, format string, args ...any) *mcp.CallToolResult {
+	msg := format
+	if len(args) > 0 {
+		msg = fmt.Sprintf(format, args...)
+	}
+	payload, err := json.Marshal(struct {
+		ErrorCode string `json:"error_code"`
+		Error     string `json:"error"`
+	}{ErrorCode: code, Error: msg})
+	if err != nil {
+		// json.Marshal of two strings cannot fail; keep a safe fallback.
+		payload = []byte(fmt.Sprintf(`{"error_code":%q,"error":"failed to encode tool error"}`, CodeInternalError))
+	}
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.TextContent{
+			mcp.NewTextContent(string(payload)),
+		},
+	}
+}

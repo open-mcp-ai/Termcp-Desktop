@@ -1,5 +1,3 @@
-export const EXTENSION_KINDS = ['mcp', 'skill', 'prompt', 'custom'];
-
 export function isExtensionNamespace(namespace) {
   const value = String(namespace || '').trim();
   return value === 'ext' || value.startsWith('ext:');
@@ -12,8 +10,8 @@ export function userSessions(items = []) {
 export function emptyExtensionForm() {
   return {
     name: '',
-    kind: 'custom',
     target: '',
+    targets: '',
     description: '',
     enabled: true,
     mode: '',
@@ -24,6 +22,8 @@ export function emptyExtensionForm() {
     allow: '',
     paths: '',
     idleTimeout: '',
+    resident: false,
+    termcpTool: '',
     notes: '',
     forwards: '',
   };
@@ -34,8 +34,8 @@ export function formFromExtensionDetail(detail = {}, document = '') {
   const file = parseFileFields(document);
   return {
     name: extension.name || '',
-    kind: detail.kind || extension.kind || 'custom',
-    target: extension.target || '',
+    target: detail.target || extension.target || '',
+    targets: formatObject(detail.targets || [], true),
     description: extension.description || '',
     enabled: extension.enabled !== false,
     mode: detail.mode || '',
@@ -45,7 +45,9 @@ export function formFromExtensionDetail(detail = {}, document = '') {
     headers: formatObject(detail.headers || file.headers),
     allow: joinLines(detail.allow),
     paths: joinLines(detail.paths),
-    idleTimeout: detail.idle_timeout || file.idleTimeout,
+    idleTimeout: detail.idle_timeout ?? file.idleTimeout ?? '',
+    resident: detail.resident === true || file.resident,
+    termcpTool: detail.termcp_tool || file.termcpTool,
     notes: detail.notes || '',
     forwards: formatObject(detail.forward_decls, true),
   };
@@ -55,15 +57,15 @@ export function formValues(form) {
   const data = {};
   for (const [key, value] of new FormData(form).entries()) data[key] = String(value);
   const enabled = form.elements?.enabled;
-  data.enabled = enabled?.type === 'checkbox'
-    ? Boolean(enabled.checked)
-    : String(enabled?.value ?? 'true') !== 'false';
+  const resident = form.elements?.resident;
   return {
     name: data.name || '',
-    kind: data.kind || 'custom',
     target: data.target || '',
+    targets: data.targets || '',
     description: data.description || '',
-    enabled: data.enabled,
+    enabled: enabled?.type === 'checkbox'
+      ? Boolean(enabled.checked)
+      : String(enabled?.value ?? 'true') !== 'false',
     mode: data.mode || '',
     command: data.command || '',
     args: data.args || '',
@@ -72,36 +74,57 @@ export function formValues(form) {
     allow: data.allow || '',
     paths: data.paths || '',
     idleTimeout: data.idle_timeout || '',
+    resident: resident?.type === 'checkbox'
+      ? Boolean(resident.checked)
+      : String(resident?.value ?? 'false') === 'true',
+    termcpTool: data.termcp_tool || '',
     notes: data.notes || '',
     forwards: data.forwards || '',
   };
 }
 
 export function extensionPayload(form, { create = false } = {}) {
-  const args = splitLines(form.args);
-  const allow = splitLines(form.allow);
-  const paths = splitLines(form.paths);
   const headers = parseObject(form.headers, 'Headers');
   const forwards = parseArray(form.forwards, 'Forwards');
+  const targets = parseArray(form.targets, 'Targets');
   const payload = {
-    kind: form.kind,
     target: twoWay(form.target),
     enabled: Boolean(form.enabled),
+    resident: Boolean(form.resident),
   };
   if (create) payload.name = twoWay(form.name);
+  if (form.targets && String(form.targets).trim()) payload.targets = targets;
 
+  setText(payload, 'termcp_tool', form.termcpTool, { create, clear: false });
   setText(payload, 'description', form.description, { create, clear: false });
   setText(payload, 'mode', form.mode, { create, clear: false });
   setText(payload, 'command', form.command, { create, clear: false });
   setText(payload, 'url', form.url, { create, clear: false });
   setText(payload, 'idle_timeout', form.idleTimeout, { create, clear: false });
   setText(payload, 'notes', form.notes, { create, clear: false });
-  setList(payload, 'args', args, form.args, create);
-  setList(payload, 'allow', allow, form.allow, create);
-  setList(payload, 'paths', paths, form.paths, create);
+  setList(payload, 'args', splitLines(form.args), form.args, create);
+  setList(payload, 'allow', splitLines(form.allow), form.allow, create);
+  setList(payload, 'paths', splitLines(form.paths), form.paths, create);
   setMap(payload, 'headers', headers, form.headers, create);
   setList(payload, 'forwards', forwards, form.forwards, create);
   return payload;
+}
+
+export function valuesFromHoles(holes = []) {
+  const values = {};
+  for (const hole of Array.isArray(holes) ? holes : []) {
+    if (hole?.set) values[hole.name] = hole.value;
+  }
+  return JSON.stringify(values, null, 2);
+}
+
+export function parseValuesDocument(document) {
+  const raw = String(document || '').trim();
+  if (!raw) return {};
+  let values;
+  try { values = JSON.parse(raw); } catch (error) { throw new Error(`Values must be valid JSON: ${error.message}`); }
+  if (!values || Array.isArray(values) || typeof values !== 'object') throw new Error('Values must be a JSON object');
+  return values;
 }
 
 export function extensionNamesFromDocument(document) {
@@ -213,7 +236,9 @@ function formatObject(value, array = false) {
 
 function parseFileFields(document) {
   const source = String(document || '');
-  const idle = source.match(/^\s*idle_timeout\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^']*)')\s*(?:#.*)?$/m);
+  const idle = source.match(/^\s*idle_timeout\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^']*)'|([0-9]+))\s*(?:#.*)?$/m);
+  const resident = /^\s*resident\s*=\s*true\s*(?:#.*)?$/m.test(source);
+  const termcpTool = source.match(/^\s*termcp_tool\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^']*)')\s*(?:#.*)?$/m);
   const headers = {};
   let inHeaders = false;
   for (const rawLine of source.split(/\r?\n/)) {
@@ -228,7 +253,9 @@ function parseFileFields(document) {
     headers[key] = value;
   }
   return {
-    idleTimeout: idle?.[1] ?? idle?.[2] ?? '',
+    idleTimeout: idle?.[1] ?? idle?.[2] ?? idle?.[3] ?? '',
+    resident,
+    termcpTool: termcpTool?.[1] ?? termcpTool?.[2] ?? '',
     headers,
   };
 }

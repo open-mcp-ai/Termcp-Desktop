@@ -23,6 +23,8 @@
 .extension-kind { display: inline-block; padding: 4px 7px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 4px; background: var(--accent-soft); color: var(--accent); font: 600 var(--font-tiny) ui-monospace, monospace; text-transform: uppercase; }
 .extension-kind.extension-invalid { border-color: color-mix(in srgb, var(--danger) 30%, var(--line)); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); color: var(--danger); }
 .extension-shape code { display: block; margin-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--font-tiny); }
+.extension-target { display: block; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--font-tiny); }
+.extension-target b { color: var(--text); font-weight: 600; }
 .extension-state { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .extension-status { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: var(--font-small); white-space: nowrap; }
 .extension-status i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--subtle); box-shadow: 0 0 0 3px rgb(138 150 166 / 12%); }
@@ -35,6 +37,7 @@
 .extension-state small, .extension-meta small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--font-tiny); }
 .extension-failure { color: var(--danger) !important; }
 .extension-handle-note { color: var(--warning) !important; }
+.extension-hole-note { color: var(--accent) !important; }
 .extension-meta span { display: block; color: var(--text); font-size: var(--font-small); }
 .extension-meta small { display: block; margin-top: 5px; }
 .extension-actions { display: flex; justify-content: flex-end; gap: 5px; flex-wrap: wrap; }
@@ -72,6 +75,18 @@
 .extension-editor input[readonly] { color: var(--muted); background: var(--surface-3); }
 .extension-editor [hidden] { display: none !important; }
 .extension-toml-editor { min-height: min(52vh, 520px) !important; white-space: pre; tab-size: 2; }
+.extension-values-editor { min-height: 260px !important; white-space: pre; font-family: ui-monospace, monospace; tab-size: 2; }
+.extension-values-help { margin: 0 0 14px; color: var(--muted); font-size: var(--font-small); line-height: 1.55; }
+.extension-holes { display: grid; gap: 8px; margin-bottom: 16px; }
+.extension-holes > div { display: grid; grid-template-columns: minmax(100px, .7fr) auto minmax(0, 1.5fr) auto; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
+.extension-holes span { font: 600 var(--font-tiny) ui-monospace, monospace; }
+.extension-holes code, .extension-holes b { color: var(--muted); font-size: var(--font-tiny); }
+.extension-holes p { margin: 0; color: var(--muted); font-size: var(--font-tiny); }
+.extension-holes .is-missing { border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
+.extension-holes .is-missing b { color: var(--accent); }
+.extension-preview { margin-top: 18px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--surface-2); }
+.extension-preview > header { display: flex; align-items: center; justify-content: space-between; padding: 8px 11px; border-bottom: 1px solid var(--line); color: var(--accent); font: 600 var(--font-tiny) ui-monospace, monospace; letter-spacing: .1em; }
+.extension-preview pre { max-height: 280px; margin: 0; padding: 12px; overflow: auto; white-space: pre; font-size: var(--font-tiny); }
 .extension-history { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .extension-history header span, .extension-history header b { display: block; }
 .extension-history header span { color: var(--danger); font: 600 var(--font-tiny) ui-monospace, monospace; letter-spacing: .1em; }
@@ -102,6 +117,8 @@
   .extension-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .extension-form-grid { grid-template-columns: 1fr; }
   .extension-form-grid > .span-2 { grid-column: auto; }
+  .extension-holes > div { grid-template-columns: 1fr auto; }
+  .extension-holes p { grid-column: 1 / -1; }
   .extension-editor-modal > .extension-editor { padding: 15px 16px 20px; }
   .extension-editor-modal > header, .extension-editor-modal > footer { padding-left: 16px; padding-right: 16px; }
 }

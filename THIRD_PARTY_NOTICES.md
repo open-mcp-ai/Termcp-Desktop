@@ -3,6 +3,7 @@
 Termcp-Desktop includes or links the following components. These notices do not change the Apache License 2.0 that applies to Termcp-Desktop's own source code.
 
 - termcp — Copyright (c) 2026 open-mcp-ai — MIT License
+- termcp Core v0.2.9 Desktop API-only patch — Copyright (c) 2026 open-mcp-ai — MIT License; source commit and patch details are in `third_party/termcp-core/UPSTREAM.md`
 - Wails — Copyright (c) 2018-Present Lea Anthony — MIT License
 - GoGPU systray — Copyright (c) 2026 Andrey Kolkov and GoGPU Contributors — MIT License
 - xterm.js and FitAddon — Copyright (c) 2014 The xterm.js authors; Copyright (c) 2012-2013 Christopher Jeffrey — MIT License

@@ -1,0 +1,1192 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
+	"github.com/open-mcp-ai/termcp/internal/message"
+	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	"github.com/open-mcp-ai/termcp/internal/sshserver"
+	"github.com/open-mcp-ai/termcp/internal/storage"
+	"github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/pkg/api"
+)
+
+// startTestSSH starts an in-process SSH server for a test.
+func startTestSSH(t *testing.T) *sshserver.Server {
+	t.Helper()
+	srv := sshserver.New()
+	mcpbridge.RegisterBuiltin(srv, nil)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return srv
+}
+
+// cleanupTestRuntime finalizes every session — draining exit watchers and any
+// in-flight log writes — then stops the SSH server. It must be registered
+// AFTER t.TempDir so LIFO runs it before the temp dir is removed: otherwise a
+// session watcher could still be appending log.bin during RemoveAll,
+// which on Windows fails with "The directory is not empty".
+func cleanupTestRuntime(t *testing.T, sessMgr *session.Manager, srv *sshserver.Server) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, s := range sessMgr.ListAll() {
+			_ = sessMgr.Delete(s.ID)
+		}
+		srv.Stop()
+	})
+}
+
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	srv := startTestSSH(t)
+
+	dir := t.TempDir()
+	store := storage.New(dir)
+	msgMgr := message.NewManager(store)
+	sessMgr := session.NewManager(msgMgr, store, srv)
+	cleanupTestRuntime(t, sessMgr, srv)
+	// The specialised surface is opt-in (issue #117); these tests drive its
+	// handlers directly, so they ask for it explicitly.
+	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil, "test")
+	return s
+}
+
+func makeRequest(args map[string]any) mcp.CallToolRequest {
+	return mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Arguments: args,
+		},
+	}
+}
+
+func parseResult(t *testing.T, result *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	text := result.Content[0].Text
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("failed to parse result: %v, text: %s", err, text)
+	}
+	return m
+}
+
+func testShell() string {
+	if runtime.GOOS == "windows" {
+		return "powershell.exe"
+	}
+	return "bash"
+}
+
+func testInteractiveShellArgs() []any {
+	if runtime.GOOS == "windows" {
+		return testShellArgs("-NoLogo", "-NoProfile")
+	}
+	return nil
+}
+
+func testShellInput(s string) string {
+	if runtime.GOOS == "windows" {
+		return s + "\r\n"
+	}
+	return s + "\n"
+}
+
+func testInteractiveOutputCommand(s string) string {
+	if runtime.GOOS == "windows" {
+		return "Write-Output " + s
+	}
+	return "echo " + s
+}
+
+func testShellArgs(args ...string) []any {
+	values := make([]any, len(args))
+	for i, arg := range args {
+		values[i] = arg
+	}
+	return values
+}
+
+func testShellEchoArgs(s string) []any {
+	if runtime.GOOS == "windows" {
+		return testShellArgs("-NoLogo", "-NoProfile", "-Command", "Write-Output "+s)
+	}
+	return testShellArgs("-c", "echo "+s)
+}
+
+// testShellIdleArgs runs a shell that stays alive and prints nothing. Use it to
+// register a notification rule and then drive the dispatch by hand: a shell that
+// exits instead (testShellEchoArgs) makes OnExit cascade-clear the rule, so the
+// hand-driven OnOutput can land on a rule that no longer exists and the test then
+// waits out its full timeout. Printing nothing also keeps the shell's own output
+// hook from racing the dispatch under test.
+func testShellIdleArgs() []any {
+	if runtime.GOOS == "windows" {
+		return testShellArgs("-NoLogo", "-NoProfile", "-Command", "Start-Sleep -Seconds 60")
+	}
+	return testShellArgs("-c", "sleep 60")
+}
+
+func testReadOutputUntil(t *testing.T, s *Server, shellID, marker string, timeout time.Duration) string {
+	t.Helper()
+	return testReadOutputUntilCount(t, s, shellID, marker, 1, timeout)
+}
+
+// testReadOutputUntilCount waits until the marker has been seen want times, and
+// returns everything it accumulated.
+//
+// THE COUNT MATTERS BECAUSE AN ECHO IS NOT AN ANSWER. A terminal echoes the line it
+// was given before the shell runs it, so a marker appears twice for one command, and a
+// caller that stops at the first occurrence has not waited for the command at all. A
+// test that then compares two snapshots of the transcript is comparing two photographs
+// of a moving thing (issue #189).
+//
+// The reads CONSUME (no offset), so each call sees only the bytes that arrived since
+// the last one — which is why the count has to be accumulated across them.
+func testReadOutputUntilCount(t *testing.T, s *Server, shellID, marker string, want int, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var output string
+	for time.Now().Before(deadline) {
+		readReq := makeRequest(map[string]any{
+			"shell_id": shellID,
+			"timeout":  0.5,
+		})
+		readResult, err := s.handleReadOutput(context.Background(), readReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if readResult.IsError {
+			t.Fatalf("unexpected error: %s", readResult.Content[0].Text)
+		}
+		readM := parseResult(t, readResult)
+		output += readM["output"].(string)
+		if strings.Count(output, marker) >= want {
+			break
+		}
+	}
+	return output
+}
+
+func testRunLine(t *testing.T, s *Server, shellID, text string) {
+	t.Helper()
+	sendReq := makeRequest(map[string]any{"shell_id": shellID, "text": text})
+	sendResult, err := s.handleSendInput(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sendResult.IsError {
+		t.Fatalf("send_input error: %s", sendResult.Content[0].Text)
+	}
+	keyReq := makeRequest(map[string]any{"shell_id": shellID, "key": "enter"})
+	keyResult, err := s.handlePressKey(context.Background(), keyReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyResult.IsError {
+		t.Fatalf("press_key error: %s", keyResult.Content[0].Text)
+	}
+}
+
+func TestHandleDetectShell_Auto(t *testing.T) {
+	s := newTestServer(t)
+	result, err := s.handleDetectShell(context.Background(), makeRequest(map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
+	}
+
+	m := parseResult(t, result)
+	path, ok := m["path"].(string)
+	if !ok || path == "" {
+		t.Fatalf("expected non-empty shell path, got %#v", m["path"])
+	}
+	family, ok := m["family"].(string)
+	if !ok || family == "" {
+		t.Fatalf("expected non-empty shell family, got %#v", m["family"])
+	}
+	if family != "unix" && family != "powershell" && family != "cmd" {
+		t.Fatalf("expected supported shell family, got %q", family)
+	}
+	hint, ok := m["hint"].(string)
+	if !ok || hint == "" {
+		t.Fatalf("expected non-empty hint, got %#v", m["hint"])
+	}
+}
+
+func TestHandleStartSession_MissingSSHConfig(t *testing.T) {
+	s := newTestServer(t)
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"omitted", map[string]any{}},
+		{"blank", map[string]any{"ssh_config": "   "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := s.handleStartSession(context.Background(), makeRequest(tc.args))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.IsError {
+				t.Fatal("expected error when ssh_config is missing or blank")
+			}
+			code, msg := decodeToolError(t, result)
+			if code != CodeInvalidArgument {
+				t.Fatalf("expected error_code %q, got %q", CodeInvalidArgument, code)
+			}
+			if msg != "ssh_config is required" {
+				t.Fatalf("expected message %q, got %q", "ssh_config is required", msg)
+			}
+		})
+	}
+}
+
+func TestHandleStartSession_EmptyCommandOK(t *testing.T) {
+	s := newTestServer(t)
+	req := makeRequest(map[string]any{"ssh_config": "internal"})
+	result, err := s.handleStartSession(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
+	}
+	m := parseResult(t, result)
+	if m["session_id"] == nil {
+		t.Fatal("expected session_id in result")
+	}
+}
+
+func TestHandleStartSession_CommandRequiredWhenArgs(t *testing.T) {
+	s := newTestServer(t)
+	req := makeRequest(map[string]any{
+		"ssh_config": "internal",
+		"args":       []any{"-c", "echo hi"},
+	})
+	result, err := s.handleStartSession(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error when args without command")
+	}
+}
+
+func TestHandleStartSession_Success(t *testing.T) {
+	s := newTestServer(t)
+	req := makeRequest(map[string]any{
+		"command":    "echo",
+		"args":       []any{"hello"},
+		"mode":       "pipe",
+		"ssh_config": "internal",
+	})
+
+	result, err := s.handleStartSession(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
+	}
+
+	m := parseResult(t, result)
+	if m["session_id"] == nil {
+		t.Fatal("expected session_id in result")
+	}
+	if m["ssh_config"] != "internal" {
+		t.Fatalf("expected ssh_config internal, got %v", m["ssh_config"])
+	}
+	if m["shell_id"] == nil || m["shell_id"] == "" {
+		t.Fatal("expected shell_id in result")
+	}
+	if m["shell_id"] == m["session_id"] {
+		t.Fatal("shell_id must differ from session_id")
+	}
+}
+
+func TestHandleSendInput_ShellNotFound(t *testing.T) {
+	s := newTestServer(t)
+	req := makeRequest(map[string]any{
+		"shell_id": "nonexistent",
+		"text":     "hello",
+	})
+
+	result, err := s.handleSendInput(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for nonexistent shell")
+	}
+}
+
+func TestHandleListSessions_Empty(t *testing.T) {
+	s := newTestServer(t)
+	req := makeRequest(map[string]any{})
+
+	result, err := s.handleListSessions(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := parseResult(t, result)
+	sessions := m["sessions"].([]any)
+	if len(sessions) != 0 {
+		t.Fatalf("expected 0 sessions, got %d", len(sessions))
+	}
+}
+
+func TestHandleTerminateSession_SessionNotFound(t *testing.T) {
+	s := newTestServer(t)
+	req := makeRequest(map[string]any{
+		"session_id": "nonexistent",
+	})
+
+	result, err := s.handleTerminateSession(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for nonexistent session")
+	}
+}
+
+func TestHandleGetSessionInfo_NotFound(t *testing.T) {
+	s := newTestServer(t)
+	req := makeRequest(map[string]any{
+		"session_id": "nonexistent",
+	})
+
+	result, err := s.handleGetSessionInfo(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for nonexistent session")
+	}
+}
+
+func TestHandleResizePty_NotFound(t *testing.T) {
+	s := newTestServer(t)
+	req := makeRequest(map[string]any{
+		"shell_id": "nonexistent",
+		"rows":     float64(50),
+		"cols":     float64(120),
+	})
+
+	result, err := s.handleResizePty(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for nonexistent shell")
+	}
+}
+
+func TestHandleStartSendPressKeyRead(t *testing.T) {
+	s := newTestServer(t)
+
+	startReq := makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	})
+	startResult, err := s.handleStartSession(context.Background(), startReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseResult(t, startResult)
+	sessionID := m["session_id"].(string)
+	shellID := m["shell_id"].(string)
+
+	time.Sleep(300 * time.Millisecond)
+
+	// PowerShell cold-start under ConPTY can exceed 300ms on slow CI runners;
+	// input typed before the shell is ready may be dropped. Retry the line
+	// until the marker appears so this asserts behavior, not startup speed.
+	deadline := time.Now().Add(30 * time.Second)
+	output := ""
+	for time.Now().Before(deadline) {
+		testRunLine(t, s, shellID, testInteractiveOutputCommand("handler_test"))
+		output = testReadOutputUntil(t, s, shellID, "handler_test", 3*time.Second)
+		if strings.Contains(output, "handler_test") {
+			break
+		}
+	}
+	if !strings.Contains(output, "handler_test") {
+		t.Fatalf("expected output containing 'handler_test', got %q", output)
+	}
+
+	termReq := makeRequest(map[string]any{
+		"session_id": sessionID,
+		"force":      true,
+	})
+	s.handleTerminateSession(context.Background(), termReq)
+}
+
+func TestHandleListMessages(t *testing.T) {
+	s := newTestServer(t)
+
+	startReq := makeRequest(map[string]any{
+		"command":    "echo",
+		"args":       []any{"test"},
+		"mode":       "pipe",
+		"ssh_config": "internal",
+	})
+	startResult, _ := s.handleStartSession(context.Background(), startReq)
+	m := parseResult(t, startResult)
+	sessionID := m["session_id"].(string)
+
+	time.Sleep(500 * time.Millisecond)
+
+	// The transcript is a byte log with a status index, so listing returns spans
+	// (status + offsets), not message payloads.
+	listReq := makeRequest(map[string]any{
+		"session_id": sessionID,
+	})
+	listResult, err := s.handleListMessages(context.Background(), listReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listM := parseResult(t, listResult)
+	spans, ok := listM["spans"].([]any)
+	if !ok {
+		t.Fatalf("expected spans in the result, got %v", listM)
+	}
+	if len(spans) == 0 {
+		t.Fatal("expected at least one span for a session that produced output")
+	}
+	first := spans[0].(map[string]any)
+	if first["status"] != string(api.LogOutput) {
+		t.Errorf("first span status = %v, want %q", first["status"], api.LogOutput)
+	}
+	if _, ok := first["start"]; !ok {
+		t.Error("span carries no start offset")
+	}
+	if _, ok := first["end"]; !ok {
+		t.Error("span carries no end offset")
+	}
+	if _, ok := listM["total_bytes"]; !ok {
+		t.Error("result carries no total_bytes")
+	}
+}
+
+// send_input must return without waiting for the shell to produce output: it
+// only writes bytes to the PTY, so the call is O(bytes) and not O(command).
+//
+// The assertion is deliberately not a tight wall-clock budget. The failure this
+// guards against is a handler that WAITS for the command to finish (a blocking
+// drain, a read-until-prompt), which costs the command's whole runtime — order
+// 100ms+ for the trivial echo below, and far more for a real command. A contended
+// CI runner adds tens of ms of scheduler delay to any single call, so a 500ms bar
+// is only a floor: it is 50x the work being measured and still catches the bug it
+// exists for.
+func TestHandleSendInput_ReturnsImmediately(t *testing.T) {
+	s := newTestServer(t)
+
+	startReq := makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	})
+	startResult, err := s.handleStartSession(context.Background(), startReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseResult(t, startResult)
+	sessionID := m["session_id"].(string)
+	shellID := m["shell_id"].(string)
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Run a command whose own runtime is far below the budget: if send_input were
+	// waiting for it, the elapsed time would be dominated by the sleep, not by the
+	// scheduling of one write.
+	start := time.Now()
+	sendReq := makeRequest(map[string]any{
+		"shell_id": shellID,
+		"text":     testInteractiveOutputCommand("bg_test"),
+	})
+	sendResult, err := s.handleSendInput(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sendResult.IsError {
+		t.Fatalf("unexpected error: %s", sendResult.Content[0].Text)
+	}
+	elapsed := time.Since(start)
+	// 4 seconds: a handler that blocked on the shell would be gated by the shell
+	// itself, while this budget only has to absorb CI scheduler noise. The comment
+	// above TestHandleSendInput_ReturnsImmediately explains the margin.
+	if elapsed > 4*time.Second {
+		t.Fatalf("send_input took %v — it must return without waiting for the shell", elapsed)
+	}
+
+	keyReq := makeRequest(map[string]any{"shell_id": shellID, "key": "enter"})
+	if _, err := s.handlePressKey(context.Background(), keyReq); err != nil {
+		t.Fatal(err)
+	}
+
+	output := testReadOutputUntil(t, s, shellID, "bg_test", 3*time.Second)
+	if !strings.Contains(output, "bg_test") {
+		t.Fatalf("expected output containing 'bg_test', got %q", output)
+	}
+
+	termReq := makeRequest(map[string]any{"session_id": sessionID, "force": true})
+	s.handleTerminateSession(context.Background(), termReq)
+}
+
+func TestHandleReadOutput_ContextCancelled(t *testing.T) {
+	s := newTestServer(t)
+
+	startReq := makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	})
+	startResult, err := s.handleStartSession(context.Background(), startReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseResult(t, startResult)
+	sessionID := m["session_id"].(string)
+	shellID := m["shell_id"].(string)
+
+	time.Sleep(300 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	readReq := makeRequest(map[string]any{
+		"shell_id": shellID,
+		"timeout":  30.0,
+	})
+	readResult, err := s.handleReadOutput(ctx, readReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Fatalf("read_output should return on ctx cancel, took %v", elapsed)
+	}
+	_ = readResult
+
+	termReq := makeRequest(map[string]any{"session_id": sessionID, "force": true})
+	s.handleTerminateSession(context.Background(), termReq)
+}
+
+func TestHandleSendInput_ExitedShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PowerShell -Command under ConPTY stays interactive after command completion")
+	}
+	s := newTestServer(t)
+
+	startReq := makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testShellEchoArgs("done"),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	})
+	startResult, _ := s.handleStartSession(context.Background(), startReq)
+	m := parseResult(t, startResult)
+	shellID := m["shell_id"].(string)
+
+	time.Sleep(2 * time.Second)
+
+	sendReq := makeRequest(map[string]any{
+		"shell_id": shellID,
+		"text":     "should fail",
+	})
+	sendResult, err := s.handleSendInput(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sendResult.IsError {
+		t.Fatal("expected error when sending to exited shell")
+	}
+}
+
+func TestHandlePressKey_UnknownKey(t *testing.T) {
+	s := newTestServer(t)
+	startReq := makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	})
+	startResult, err := s.handleStartSession(context.Background(), startReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseResult(t, startResult)
+	sessionID := m["session_id"].(string)
+	shellID := m["shell_id"].(string)
+
+	keyReq := makeRequest(map[string]any{"shell_id": shellID, "key": "f99"})
+	keyResult, err := s.handlePressKey(context.Background(), keyReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keyResult.IsError {
+		t.Fatal("expected error for unknown key")
+	}
+
+	termReq := makeRequest(map[string]any{"session_id": sessionID, "force": true})
+	s.handleTerminateSession(context.Background(), termReq)
+}
+
+// Mode is a property of each shell channel, not of the container: the same
+// session must be able to hold a pty shell and a pipe shell at once, each
+// reporting its own mode, and an invalid mode must be refused rather than
+// silently treated as pipe (which is what `mode == "pty"` used to do).
+func TestHandleStartSubShell_ModeIsPerShell(t *testing.T) {
+	s := newTestServer(t)
+
+	startRes, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
+		"command":    testShell(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("start session failed: %v %+v", err, startRes)
+	}
+	sessionID := parseResult(t, startRes)["session_id"].(string)
+
+	for _, mode := range []string{"websocket", "PTY", "x"} {
+		res, err := s.handleStartSubShell(context.Background(), makeRequest(map[string]any{
+			"session_id": sessionID,
+			"mode":       mode,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code, _ := decodeToolError(t, res); code != CodeInvalidArgument {
+			t.Fatalf("mode %q: expected %s, got %q", mode, CodeInvalidArgument, code)
+		}
+	}
+
+	pipeRes, err := s.handleStartSubShell(context.Background(), makeRequest(map[string]any{
+		"session_id": sessionID,
+		"mode":       "pipe",
+		"command":    "echo",
+		"args":       []string{"hi"},
+	}))
+	if err != nil || pipeRes.IsError {
+		t.Fatalf("shell_open(pipe) failed: %v %+v", err, pipeRes)
+	}
+	pipeShellID := parseResult(t, pipeRes)["shell_id"].(string)
+
+	listRes, err := s.handleListSubshells(context.Background(), makeRequest(map[string]any{"session_id": sessionID}))
+	if err != nil || listRes.IsError {
+		t.Fatalf("shell_list failed: %v %+v", err, listRes)
+	}
+	var listed struct {
+		Shells []api.Session `json:"shells"`
+	}
+	if err := json.Unmarshal([]byte(listRes.Content[0].Text), &listed); err != nil {
+		t.Fatal(err)
+	}
+	modes := map[string]api.SessionMode{}
+	for _, sh := range listed.Shells {
+		modes[sh.ID] = sh.Mode
+	}
+	if got := modes[pipeShellID]; got != api.ModePipe {
+		t.Fatalf("pipe shell reports mode %q, want %q", got, api.ModePipe)
+	}
+
+	// A pipe shell has no TTY, so resizing it must fail; the pty shell must not.
+	resizeRes, err := s.handleResizePty(context.Background(), makeRequest(map[string]any{
+		"shell_id": pipeShellID, "rows": float64(40), "cols": float64(120),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resizeRes.IsError {
+		t.Fatal("resizing a pipe shell must fail: it has no TTY")
+	}
+}
+
+func TestHandleStartSession_InvalidMode(t *testing.T) {
+	s := newTestServer(t)
+	for _, mode := range []string{"websocket", "x"} {
+		req := makeRequest(map[string]any{
+			"command":    "echo",
+			"mode":       mode,
+			"ssh_config": "internal",
+		})
+		result, _ := s.handleStartSession(context.Background(), req)
+		if !result.IsError {
+			t.Fatalf("expected error for mode %q", mode)
+		}
+	}
+}
+
+func TestHandleStartSession_InvalidRowsCols(t *testing.T) {
+	s := newTestServer(t)
+	for _, tc := range []struct {
+		rows float64
+		cols float64
+	}{
+		{0, 80}, {-1, 80}, {24, 0}, {24, -5}, {1001, 80},
+	} {
+		req := makeRequest(map[string]any{
+			"command":    "echo",
+			"mode":       "pty",
+			"rows":       tc.rows,
+			"cols":       tc.cols,
+			"ssh_config": "internal",
+		})
+		result, _ := s.handleStartSession(context.Background(), req)
+		if !result.IsError {
+			t.Fatalf("expected error for rows=%v cols=%v", tc.rows, tc.cols)
+		}
+	}
+}
+
+func TestHandleReadOutput_InvalidTimeout(t *testing.T) {
+	s := newTestServer(t)
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
+	startResult, _ := s.handleStartSession(context.Background(), startReq)
+	m := parseResult(t, startResult)
+	shellID := m["shell_id"].(string)
+
+	// ONLY A NEGATIVE TIMEOUT IS A MISTAKE. The window is the caller's bill to pay, so
+	// a large one is a request and not an error: `timeout: 61` and `timeout: 999` used
+	// to be refused by an upper bound the comment beside it already denied, and the
+	// message described the negative case while naming a positive number (issue #168).
+	// This test used to assert that refusal, which is what made the lie look intended.
+	for _, timeout := range []float64{61, 999, 0} {
+		req := makeRequest(map[string]any{
+			"shell_id": shellID,
+			"timeout":  timeout,
+		})
+		result, _ := s.handleReadOutput(context.Background(), req)
+		if result.IsError {
+			t.Fatalf("timeout %v is a window, not an error: %s", timeout, result.Content[0].Text)
+		}
+	}
+
+	negReq := makeRequest(map[string]any{
+		"shell_id": shellID,
+		"timeout":  -1.0,
+	})
+	negResult, _ := s.handleReadOutput(context.Background(), negReq)
+	if !negResult.IsError {
+		t.Fatal("a negative timeout is a typo, not a wish, and must be refused")
+	}
+}
+
+func TestHandleTerminateSession_InvalidGracePeriod(t *testing.T) {
+	s := newTestServer(t)
+
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
+	startResult, _ := s.handleStartSession(context.Background(), startReq)
+	m := parseResult(t, startResult)
+	sessionID := m["session_id"].(string)
+
+	for _, gp := range []float64{-1, 61, 3600} {
+		req := makeRequest(map[string]any{
+			"session_id":   sessionID,
+			"grace_period": gp,
+		})
+		result, _ := s.handleTerminateSession(context.Background(), req)
+		if !result.IsError {
+			t.Fatalf("expected error for grace_period %v", gp)
+		}
+	}
+}
+
+func TestHandleReadOutput_ReturnsSessionStatus(t *testing.T) {
+	s := newTestServer(t)
+
+	startReq := makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	})
+	startResult, err := s.handleStartSession(context.Background(), startReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseResult(t, startResult)
+	sessionID := m["session_id"].(string)
+	shellID := m["shell_id"].(string)
+
+	time.Sleep(300 * time.Millisecond)
+
+	readReq := makeRequest(map[string]any{
+		"shell_id": shellID,
+		"timeout":  1.0,
+	})
+	result, err := s.handleReadOutput(context.Background(), readReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm := parseResult(t, result)
+
+	status, ok := rm["session_status"].(string)
+	if !ok {
+		t.Fatal("expected session_status in read_output result")
+	}
+	if status != "running" {
+		t.Fatalf("expected session_status=running, got %q", status)
+	}
+
+	uptime, ok := rm["session_uptime_seconds"]
+	if !ok {
+		t.Fatal("expected session_uptime_seconds in read_output result")
+	}
+	// JSON numbers unmarshal as float64
+	sec := uptime.(float64)
+	if sec < 0 {
+		t.Fatalf("expected session_uptime_seconds >= 0, got %v", sec)
+	}
+
+	termReq := makeRequest(map[string]any{
+		"session_id": sessionID,
+		"force":      true,
+	})
+	s.handleTerminateSession(context.Background(), termReq)
+}
+func TestHandleFileOpsDispatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SFTP mode semantics differ on Windows")
+	}
+	s := newTestServer(t)
+	// Dispatch needs a RUNNING session: file tools short-circuit with
+	// session_not_running before the action switch when the session is DEAD (an
+	// `echo` pipe session exits within ms, and the unknown-action subtest would
+	// even pass vacuously on the guard's error — see
+	// TestCleanExitPipeSessionIsReadOnly). A long-lived pipe command keeps the
+	// fixture in pipe mode while reaching the real dispatch switch.
+	startReq := makeRequest(map[string]any{
+		"command":    "sleep",
+		"args":       testShellArgs("30"),
+		"mode":       "pipe",
+		"ssh_config": "internal",
+	})
+	startResult, err := s.handleStartSession(context.Background(), startReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseResult(t, startResult)
+	sessionID := m["session_id"].(string)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("chmod", func(t *testing.T) {
+		req := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "chmod",
+			"remote_path": path,
+			"mode":        float64(0600),
+		})
+		res, err := s.handleFilePerm(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.IsError {
+			t.Fatalf("chmod error: %s", res.Content[0].Text)
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0600 {
+			t.Fatalf("expected 0600, got %o", fi.Mode().Perm())
+		}
+
+		noMode := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "chmod",
+			"remote_path": path,
+		})
+		noModeRes, _ := s.handleFilePerm(context.Background(), noMode)
+		if !noModeRes.IsError {
+			t.Fatal("expected error when mode missing")
+		}
+
+		// chmod 000 is a valid operation (strip all permissions) and must be accepted.
+		zero := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "chmod",
+			"remote_path": path,
+			"mode":        float64(0),
+		})
+		zeroRes, _ := s.handleFilePerm(context.Background(), zero)
+		if zeroRes.IsError {
+			t.Fatalf("chmod 000 should be accepted: %s", zeroRes.Content[0].Text)
+		}
+		fi, err = os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0 {
+			t.Fatalf("expected perm 0000, got %o", fi.Mode().Perm())
+		}
+		// restore perms for later subtests
+		rm := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "chmod",
+			"remote_path": path,
+			"mode":        float64(0644),
+		})
+		rmRes, _ := s.handleFilePerm(context.Background(), rm)
+		if rmRes.IsError {
+			t.Fatalf("restore chmod failed: %s", rmRes.Content[0].Text)
+		}
+	})
+
+	t.Run("realpath", func(t *testing.T) {
+		req := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "realpath",
+			"remote_path": dir,
+		})
+		res, err := s.handleFileFsOp(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.IsError {
+			t.Fatalf("realpath error: %s", res.Content[0].Text)
+		}
+		m := parseResult(t, res)
+		gotPath, ok := m["canonical_path"].(string)
+		if !ok || gotPath == "" {
+			t.Fatalf("expected non-empty canonical_path, got %v", m["canonical_path"])
+		}
+		if !strings.HasSuffix(gotPath, filepath.Base(dir)) {
+			t.Fatalf("canonical_path %q should end with %q", gotPath, filepath.Base(dir))
+		}
+	})
+
+	t.Run("unknown action rejected", func(t *testing.T) {
+		calls := map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error){
+			"file_perm": s.handleFilePerm,
+			"file_link": s.handleFileLinkOp,
+			"file_fs":   s.handleFileFsOp,
+		}
+		for name, h := range calls {
+			req := makeRequest(map[string]any{
+				"session_id":  sessionID,
+				"action":      "nope",
+				"remote_path": path,
+			})
+			res, _ := h(context.Background(), req)
+			if !res.IsError {
+				t.Fatalf("%s: expected error", name)
+			}
+		}
+	})
+
+	termReq := makeRequest(map[string]any{"session_id": sessionID, "force": true})
+	s.handleTerminateSession(context.Background(), termReq)
+}
+func TestGroupDispatch(t *testing.T) {
+	s := newTestServer(t)
+
+	// unknown actions rejected on every unified tool
+	dispatchers := map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error){
+		"message":    s.handleMessageOps,
+		"forward":    s.handleForwardOps,
+		"ssh_config": s.handleSSHConfigOps,
+	}
+	for name, h := range dispatchers {
+		req := makeRequest(map[string]any{"action": "bogus"})
+		res, _ := h(context.Background(), req)
+		if !res.IsError {
+			t.Fatalf("%s: expected error for unknown action", name)
+		}
+	}
+
+	// Profile writes are gated behind ManageSSHConfigs (--mcp-manage-ssh-configs);
+	// the listing is always available, because a model that is refused a write
+	// still needs to know which profile names exist.
+	req := makeRequest(map[string]any{"action": "create"})
+	res, _ := s.handleSSHConfigOps(context.Background(), req)
+	if !res.IsError {
+		t.Fatal("expected create to be rejected while ManageSSHConfigs is off")
+	}
+	s.ManageSSHConfigs = true
+	req = makeRequest(map[string]any{"action": "list"})
+	res, err := s.handleSSHConfigOps(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("list should work after upgrade: %s", res.Content[0].Text)
+	}
+
+	// forward(action=list) on empty registry
+	fwdReq := makeRequest(map[string]any{"action": "list"})
+	fwdRes, err := s.handleForwardOps(context.Background(), fwdReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := parseResult(t, fwdRes)
+	if _, ok := fm["forwards"].([]any); !ok {
+		t.Fatalf("expected forwards array, got %v", fm["forwards"])
+	}
+
+	// message(action=list) needs a session (per-session index)
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
+	startRes, err := s.handleStartSession(context.Background(), startReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm := parseResult(t, startRes)
+	sid := sm["session_id"].(string)
+	msgReq := makeRequest(map[string]any{"action": "list", "session_id": sid})
+	msgRes, err := s.handleMessageOps(context.Background(), msgReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msgRes.IsError {
+		t.Fatalf("message list error: %s", msgRes.Content[0].Text)
+	}
+	mm := parseResult(t, msgRes)
+	if _, ok := mm["spans"].([]any); !ok {
+		t.Fatalf("expected spans array, got %v", mm["spans"])
+	}
+	termReq := makeRequest(map[string]any{"session_id": sid, "force": true})
+	s.handleTerminateSession(context.Background(), termReq)
+}
+
+func TestDeadSessionOperationsNoPanic(t *testing.T) {
+	dir := t.TempDir()
+	store := storage.New(dir)
+	msgMgr := message.NewManager(store)
+	sessMgr := session.NewManager(msgMgr, store, nil)
+	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil, "test")
+
+	// Persist a session to disk and restore it so it is in the registry without an SSH connection.
+	deadSession := api.Session{
+		ID:          "dead-sess-1",
+		Name:        "dead-session",
+		Status:      api.SessionExited,
+		SSHEndpoint: "remote",
+	}
+	if err := store.SaveSession(deadSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessMgr.RestoreDead(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. File write on dead session must return tool error without panic.
+	writeReq := makeRequest(map[string]any{
+		"session_id":  "dead-sess-1",
+		"remote_path": "/tmp/test.txt",
+		"data":        "hello",
+	})
+	writeRes, err := s.handleFileWrite(context.Background(), writeReq)
+	if err != nil {
+		t.Fatalf("unexpected handler error: %v", err)
+	}
+	if !writeRes.IsError {
+		t.Fatal("expected error result on dead session file write")
+	}
+
+	// 2. File read on dead session must return tool error without panic.
+	readReq := makeRequest(map[string]any{
+		"session_id":  "dead-sess-1",
+		"remote_path": "/tmp/test.txt",
+	})
+	readRes, err := s.handleFileRead(context.Background(), readReq)
+	if err != nil {
+		t.Fatalf("unexpected handler error: %v", err)
+	}
+	if !readRes.IsError {
+		t.Fatal("expected error result on dead session file read")
+	}
+
+	// 3. Local forward on dead session must return tool error without panic.
+	fwdReq := makeRequest(map[string]any{
+		"session_id":  "dead-sess-1",
+		"remote_port": float64(8080),
+		"local_port":  float64(8080),
+	})
+	fwdRes, err := s.handleLocalForward(context.Background(), fwdReq)
+	if err != nil {
+		t.Fatalf("unexpected handler error: %v", err)
+	}
+	if !fwdRes.IsError {
+		t.Fatal("expected error result on dead session forward")
+	}
+}
+
+// shell_output's payload carries both ids, and callers use session_id to address
+// the session again (terminate, list shells). The live-shell branch answered it by
+// scanning every session for the one owning the shell; it must keep reporting the
+// owning session - not the shell's own id - because a caller that fed the shell id
+// back as a session_id would address a session that does not exist.
+func TestHandleReadOutput_ReportsOwningSessionID(t *testing.T) {
+	s, _, sessMgr, _ := newTestServerWithHistory(t)
+
+	startRes, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("start session: %v", err)
+	}
+	started := parseResult(t, startRes)
+	sessID := started["session_id"].(string)
+	shellID := started["shell_id"].(string)
+	t.Cleanup(func() {
+		_, _ = s.handleTerminateSession(context.Background(),
+			makeRequest(map[string]any{"session_id": sessID, "force": true}))
+	})
+
+	// Sanity: in the internal loopback the shell id differs from the session id,
+	// otherwise this test would pass without distinguishing the two.
+	if shellID == sessID {
+		t.Skip("shell id equals session id in this environment; cannot distinguish")
+	}
+
+	res, err := s.handleReadOutput(context.Background(), makeRequest(map[string]any{
+		"shell_id":   shellID,
+		"tail_lines": 5,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read output: %v", err)
+	}
+	got := parseResult(t, res)
+	if got["session_id"] != sessID {
+		t.Errorf("session_id in payload = %v, want %q (the owning session, not the shell id %q)",
+			got["session_id"], sessID, shellID)
+	}
+	if got["shell_id"] != shellID {
+		t.Errorf("shell_id = %v, want %q", got["shell_id"], shellID)
+	}
+	// The reported id must actually resolve back to the session.
+	if owner := sessMgr.Get(got["session_id"].(string)); owner == nil {
+		t.Errorf("reported session_id %q does not resolve to a session", got["session_id"])
+	}
+}

@@ -30,10 +30,23 @@ export class ExtensionController {
     return this.api(method, path, payload, 'application/json');
   }
 
-  async saveTOML(original, name, document) {
+  async saveTOML(original, name, document, values) {
     const suffix = original ? '' : `?name=${encodeURIComponent(name)}`;
     const path = `/api/extensions${original ? `/${encodeURIComponent(original)}` : ''}${suffix}`;
-    return this.api(original ? 'PUT' : 'POST', path, String(document || ''), 'application/toml; charset=utf-8');
+    const payload = {
+      template: String(document || ''),
+    };
+    if (values !== undefined) payload.values = values;
+    return this.api(original ? 'PUT' : 'POST', path, payload, 'application/json');
+  }
+
+  async saveValues(name, values) {
+    return this.api('PUT', `/api/extensions/${encodeURIComponent(name)}`, { values: values || {} }, 'application/json');
+  }
+
+  async preview(name, document) {
+    const response = await this.api('POST', `/api/extensions/${encodeURIComponent(name)}/preview`, String(document || ''), 'application/toml; charset=utf-8');
+    return response.data ?? response.body ?? '';
   }
 
   async remove(name) {

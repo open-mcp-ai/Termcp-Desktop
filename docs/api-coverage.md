@@ -2,6 +2,8 @@
 
 Termcp 通过受限 Wails API 桥访问当前 Core 的 `/api/` 路径。终端使用同一 Core 的 WebSocket；上传和下载由 Go 流式处理并调用系统文件选择器。
 
+所有 Core 代码与 Wails 构建统一使用 `no_webui`。自动检查要求 Core embed 文件恰好只有 `assets/api.md`；上游页面 `/`、static、themes 和 xterm 资产不会进入 Desktop 产物。
+
 | 能力 | Core 接口 | GUI 入口 | 自动验证 |
 | --- | --- | --- | --- |
 | 连接列表 | `GET /api/connections` | 资源树 | 快照与集成测试 |
@@ -20,7 +22,8 @@ Termcp 通过受限 Wails API 桥访问当前 Core 的 `/api/` 路径。终端�
 | 终端流 | `GET /api/ui/ws` | xterm 工作区 | 浏览器协议适配与原生构建 |
 | 输入活动 | WebSocket `shell_activity`（`shell_id`、`src`、`submit`） | Shell 标签中的人类／AI 输入提示 | Core WebSocket 集成测试、前端状态测试 |
 | 已结束会话列表 | `GET /api/sessions`、`GET /api/sessions/{id}/shells` | 历史页 | 快照与集成测试 |
-| 扩展状态 | `GET /api/extensions`；WebSocket `sessions.extensions` | 独立 Extensions 页 | 页面交互、WebSocket 与过滤测试 |
+| 扩展状态 | `GET /api/extensions`；WebSocket `sessions.extensions` | 多主机 `targets`、holes/needs、URL peer | Go 模板/values/预览/批量与前端兼容测试 |
+| 扩展原文/安装值 | `GET /api/extensions/{name}?format=toml`、`POST /preview`、`PUT {template,values}` | 无损 TOML 编辑、独立 Values、Preview | 模板更新保值、导出不泄露本地值、缺值状态测试 |
 | 对话索引 | `GET /api/shells/{id}/marks`（与 MCP `message(action=list)` 同源） | 保留的索引绑定 | 集成测试 |
 | 历史行映射 | `GET /api/shells/{id}/rail` | 只读终端逐行颜色带、来源与时间 | 归档 Core 集成测试、浏览器滚动/缩放回归 |
 | 历史输出 | `GET /api/shells/{id}/output-range` | 从字节 0 分页连续回放 | 集成测试、UTF-8 与 ANSI 浏览器回归 |
@@ -34,9 +37,12 @@ Termcp 通过受限 Wails API 桥访问当前 Core 的 `/api/` 路径。终端�
 | 审批默认值 | 连接 TOML 的 `default_approval`；`GET/PUT /api/connections/{name}` | 设置页全局默认值、连接详情与编辑器 | 前端策略测试、Core 集成测试 |
 | 会话审批 | `PATCH /api/sessions/{id}/approval` | 会话详情 | Core 集成测试 |
 | 待审批操作与决策 | `GET /api/approvals`；`POST /api/approvals/{id}/approve`、`reject`；WebSocket `approval` 事件 | 审批列表、导航角标、应用内提示及可选系统通知 | 前端事件测试、Core 集成测试 |
+| 单审批详情 | `GET /api/approvals/{id}` | 审批执行结果恢复 | Desktop MCP 审批执行集成测试 |
 | 文件浏览 | `GET /api/sessions/{id}/files` | 右侧文件面板 | 集成测试 |
 | 上传/下载 | `/files/upload`, `/files/download` | 系统文件对话框 | 集成测试 |
 | 重命名/删除/目录 | `PUT/DELETE /files`, `POST /files/dir` | 右侧文件面板 | 集成测试 |
+| 默认目录 | `POST /api/term` 执行 `get <session> file . --op getwd`；internal 使用用户 Home | 文件面板首次打开路径 | App 路由与 `getwd` 响应测试 |
+| 集成文档与 Skill | `GET /api.md`、`POST /api/term`、`/sse`、`/stream` | Integration 页；Desktop 导出薄 `SKILL.md` | API 文档、learn-api、无 `/skills.md` 死链测试 |
 
 兼容路由仍由 Core 保留，GUI 使用 canonical 路由，避免把旧协议继续扩散到新客户端。
 
@@ -57,4 +63,5 @@ Termcp 通过受限 Wails API 桥访问当前 Core 的 `/api/` 路径。终端�
 | `ArchiveShell` | 归档 Shell 并确认历史记录可读取后才报告成功 | Core `/archive` + 本机 manifest |
 | `GetConversationIndex` | 调用 Core marks 接口读取归档 Shell 索引 | 受限 REST 桥 |
 | `SaveConversationLog` | 导出 Core 数据目录内的原始终端日志 | 本机文件系统 |
+| `SaveTermcpSkill` | 导出 Desktop 维护的薄 HTTP Skill 文档 | Wails 原生保存对话框 |
 | `RequestApprovalNotificationPermission` / `SendApprovalNotification` | 请求系统通知权限、发送待审批提醒 | Wails 原生通知接口 |
