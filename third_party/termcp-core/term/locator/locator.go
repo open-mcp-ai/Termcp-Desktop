@@ -1,0 +1,212 @@
+// Package locator parses termcp:// resource locators.
+//
+// A locator names a termcp object without a lookup round-trip, so users can
+// copy one from the Web UI and paste it into a chat or a script. Both surfaces
+// resolve them: MCP tools accept locators wherever an id is expected, and the
+// HTTP API exposes GET /api/resolve.
+//
+// Accepted forms (all via the Scheme constant):
+//
+//	termcp://<entry>              – ssh_config profile name ("internal" = loopback)
+//	termcp://#[session]           – a session (short form, always preferred)
+//	termcp://#[session]:[index]   – a shell channel of that session:
+//	                                :1 = first shell (the primary), :N = the
+//	                                stable channel number assigned at creation
+//	termcp://<entry>#[session]    – accepted for back-compat; entry is IGNORED
+//	                                (session ids are unique, entry prefixes are not reliable)
+//
+// Shell channel indexes are 1-based, assigned when channels are created, and
+// never reused or renumbered. They match the Web UI's shell-1/shell-2 labels;
+// they are not positions in the current live-shell list and are not raw ids.
+// Only the short form (no entry) is emitted by the UI copy buttons.
+//
+// Locators name live sessions. A closed (DEAD) session is deliberately NOT
+// resolvable: it has no transport left, so its channels are read-only and are
+// addressed by the session-level output-range endpoint instead.
+package locator
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// Scheme is the URL scheme prefix of every termcp resource locator.
+const Scheme = "termcp://"
+
+// Kind enumerates what a parsed resource URL names.
+type Kind int
+
+const (
+	KindEntry Kind = iota
+	KindSession
+	KindShell
+)
+
+// Parsed is the result of parsing a termcp:// locator.
+type Parsed struct {
+	Kind      Kind
+	Entry     string // non-empty only for KindEntry
+	SessionID string // session id (no "session-" prefix)
+	Index     int    // shell index, 1-based; 0 = unset (session-kind)
+}
+
+// Parse parses a possibly-scheme-qualified termcp resource locator.
+//
+// Session forms: "#<id>", "termcp://#<id>", "termcp://<entry>#<id>" (the entry
+// is ignored — session ids are unique, profile names are not), each with an
+// optional trailing ":N" selecting a shell channel. A leading "session-" is
+// stripped in all of them, so "#session-foo" means session "foo".
+//
+// A bare name ("abc123", "session-foo") is NOT a session: with no scheme and no
+// '#', it is an ENTRY (profile) name. ssh_config profile names and session ids
+// share that namespace, so a profile may legitimately be called "session-foo" and
+// must keep resolving; LooksLike agrees and does not claim the bare form.
+func Parse(raw string) (*Parsed, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil, fmt.Errorf("empty resource URL")
+	}
+	if i := strings.Index(s, Scheme); i >= 0 {
+		s = s[i+len(Scheme):]
+	}
+	s = strings.TrimPrefix(s, "//")
+	s = strings.TrimPrefix(s, "/")
+	s = strings.TrimSuffix(s, "/")
+	if s == "" {
+		return nil, fmt.Errorf("malformed resource URL %q", raw)
+	}
+
+	if strings.HasPrefix(s, "shells/") {
+		// Notification broadcast URI (termcp://shells/<shell_id>) is NOT a
+		// locator for user operations; reject it with a clear error.
+		return nil, fmt.Errorf("termcp://shells/<id> is a notification broadcast URI, not a resource URL")
+	}
+
+	// Split an optional trailing :<index> (shell channel) off the session
+	// part. Only the part after the LAST '#' can carry an index.
+	index := 0
+	if hashIdx := strings.Index(s, "#"); hashIdx >= 0 {
+		tail := s[hashIdx+1:]
+		if i := strings.LastIndex(tail, ":"); i >= 0 {
+			n, err := strconv.Atoi(tail[i+1:])
+			if err != nil || n < 1 {
+				return nil, fmt.Errorf("invalid shell index in resource URL %q", raw)
+			}
+			index = n
+			s = s[:hashIdx+1+i]
+		}
+	}
+
+	// Short form: termcp://#[session][:N] (or a bare "#session").
+	if strings.HasPrefix(s, "#") {
+		sid := strings.TrimPrefix(s, "#")
+		sid = strings.TrimPrefix(sid, "/")
+		sid = strings.TrimPrefix(sid, "session-")
+		if sid == "" {
+			return nil, fmt.Errorf("missing session id in resource URL %q", raw)
+		}
+		if index > 0 {
+			return &Parsed{Kind: KindShell, SessionID: sid, Index: index}, nil
+		}
+		return &Parsed{Kind: KindSession, SessionID: sid}, nil
+	}
+
+	// Back-compat entry form: termcp://<entry>#[session][:N].
+	// The entry prefix was found unreliable (names are user-assigned), so we
+	// accept the form but IGNORE the entry; the session id is authoritative.
+	if hashIdx := strings.Index(s, "#"); hashIdx >= 0 {
+		sid := strings.TrimPrefix(s[hashIdx+1:], "session-")
+		if sid == "" {
+			return nil, fmt.Errorf("missing session id in resource URL %q", raw)
+		}
+		if index > 0 {
+			return &Parsed{Kind: KindShell, SessionID: sid, Index: index}, nil
+		}
+		return &Parsed{Kind: KindSession, SessionID: sid}, nil
+	}
+
+	// Pure entry name: termcp://mac (no '#' anywhere).
+	if strings.ContainsAny(s, ":") {
+		return nil, fmt.Errorf("malformed resource URL %q", raw)
+	}
+	return &Parsed{Kind: KindEntry, Entry: s}, nil
+}
+
+// LooksLike reports whether s is written in termcp resource-URL syntax (scheme
+// or "#" short form) rather than as a bare id. Bare ids skip the parser so an
+// unknown id still gets the plain "not found" message instead of parser
+// diagnostics.
+//
+// A bare "session-<id>" is deliberately NOT claimed. Parse reads it as an entry
+// name, and ssh_config profile names live in the same namespace — a profile may
+// legitimately be called "session-foo", so claiming the bare form would route it
+// through the parser and away from the profile store. The prefixed spelling still
+// resolves as a session wherever a session is already expected, i.e. after a '#'
+// or a scheme.
+func LooksLike(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, Scheme) || strings.HasPrefix(s, "#")
+}
+
+// Handle is a caller-supplied reference to a session or one of its channels,
+// decomposed into the two things every caller actually needs: which session, and
+// which channel of it.
+//
+// This is the ONE place that knows the spellings a handle may take. Before it
+// existed, each entry point (requireShell, requireSession, the guard's resolvers,
+// transcript.Resolve, channelExitState) re-derived them on its own, and the
+// `sid:N` form ended up missing from most of them: it is what `ps`, `info` and
+// every `pty`/`pipe` reply prints, and it resolved for nothing. A spelling added
+// here is now visible to all of them at once.
+//
+// Index 0 means "no channel named": the session itself, i.e. its primary channel
+// for callers that need one. It is also what a caller that does not split handles
+// gets back, so a caller can ignore Index and still be correct.
+type Handle struct {
+	SessionID string // session id, with no "session-" prefix and no scheme
+	Index     int    // shell channel, 1-based; 0 = the session, not a channel
+}
+
+// SplitHandle decomposes a handle into its parts.
+//
+// Three spellings are accepted, and they overlap deliberately:
+//
+//	sid              a bare session id
+//
+// tsid:N            the short handle `ps`/`info`/`pty` print — channel N
+//
+//	termcp://#sid:N  the locator the Web UI copy buttons emit — channel N
+//
+// Locator syntax is recognised FIRST and handed to Parse. That order is the
+// whole trick: `termcp://#sid:2` ends in the same `:<N>` a short handle does, so
+// testing the short form first would split a locator into "termcp://#sid" and 2
+// and lose the one spelling the UI emits. Locators keep exactly one parser, and
+// they get it here.
+//
+// A colon that is not followed by a positive integer is part of the id, not a
+// channel: ids are opaque, so `a:b` is returned unchanged rather than reported as
+// a malformed handle. Callers that need the distinction between "bad index" and
+// "unknown id" get it from Parse, which is the only spelling that can express an
+// index at all.
+func SplitHandle(s string) Handle {
+	s = strings.TrimSpace(s)
+	if LooksLike(s) {
+		// Parse's error is dropped on purpose: a caller passing a malformed locator
+		// must still get the caller's own diagnostics from its own parser call, so
+		// this stays a pure decomposition and never a validator.
+		if p, err := Parse(s); err == nil && (p.Kind == KindSession || p.Kind == KindShell) {
+			return Handle{SessionID: p.SessionID, Index: p.Index}
+		}
+		return Handle{SessionID: s}
+	}
+	i := strings.LastIndex(s, ":")
+	if i <= 0 || i == len(s)-1 {
+		return Handle{SessionID: s}
+	}
+	n, err := strconv.Atoi(s[i+1:])
+	if err != nil || n < 1 {
+		return Handle{SessionID: s}
+	}
+	return Handle{SessionID: s[:i], Index: n}
+}

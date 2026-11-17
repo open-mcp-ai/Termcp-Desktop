@@ -116,7 +116,7 @@ jobs:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           ldflags="-X github.com/open-mcp-ai/termcp/gui/internal/config.ProductVersion=$VERSION"
-          go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform linux/amd64 -tags webkit2_41 -ldflags "$ldflags"
+          go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform linux/amd64 -tags no_webui,webkit2_41 -ldflags "$ldflags"
           mkdir -p artifacts/linux
           install -m 0755 build/bin/Termcp artifacts/linux/Termcp
           cp LICENSE README.md artifacts/linux/
@@ -130,7 +130,7 @@ jobs:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           $ldflags = "-X github.com/open-mcp-ai/termcp/gui/internal/config.ProductVersion=$env:VERSION"
-          go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform windows/amd64 -nsis -ldflags $ldflags
+          go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform windows/amd64 -nsis -tags no_webui -ldflags $ldflags
           New-Item -ItemType Directory -Force artifacts | Out-Null
           $installer = Get-ChildItem build/bin -Filter '*-amd64-installer.exe' | Select-Object -First 1
           if (-not $installer) { throw 'Wails did not produce an NSIS installer.' }
@@ -146,7 +146,7 @@ jobs:
           SLUG: ${{ matrix.slug }}
         run: |
           ldflags="-X github.com/open-mcp-ai/termcp/gui/internal/config.ProductVersion=$VERSION"
-          go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform "$PLATFORM" -ldflags "$ldflags"
+          go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform "$PLATFORM" -tags no_webui -ldflags "$ldflags"
           mkdir -p artifacts
           ditto -c -k --sequesterRsrc --keepParent build/bin/Termcp.app "artifacts/Termcp-$VERSION-$SLUG.zip"
           staging="$(mktemp -d)"

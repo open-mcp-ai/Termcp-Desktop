@@ -80,3 +80,21 @@ test('Core upgrade updates the app labels without changing the Desktop version s
   assert.match(await readFile(join(root, 'internal/config/product.go'), 'utf8'), /CoreVersion = "0\.2\.6"/);
   assert.match(await readFile(join(root, 'frontend/src/build-info.js'), 'utf8'), /bundledCoreVersion = '0\.2\.6'/);
 });
+
+test('a patched Core keeps its explicit build suffix and needs the checked-in replacement', async t => {
+  const root = await fixture(t);
+  await writeFile(join(root, 'go.mod'), 'module example.test/desktop\n\nrequire (\n  github.com/open-mcp-ai/termcp v0.2.9\n)\n\nreplace github.com/open-mcp-ai/termcp => ./third_party/termcp-core\n');
+  await writeFile(join(root, 'internal/config/product.go'), 'package config\nvar ProductVersion = "0.1.1"\nvar CoreVersion = "0.2.9+desktop.1"\n');
+  await writeFile(join(root, 'frontend/src/build-info.js'), "export const desktopVersion = '0.1.1';\nexport const bundledCoreVersion = '0.2.9+desktop.1';\n");
+  const check = run(root, '--check');
+  assert.equal(check.status, 0, check.stderr);
+  assert.match(check.stdout, /bundled Core v0\.2\.9\+desktop\.1/);
+  const release = run(root, 'v0.1.2');
+  assert.equal(release.status, 0, release.stderr);
+  assert.match(await readFile(join(root, 'internal/config/product.go'), 'utf8'), /CoreVersion = "0\.2\.9\+desktop\.1"/);
+
+  await writeFile(join(root, 'go.mod'), 'module example.test/desktop\n\nrequire (\n  github.com/open-mcp-ai/termcp v0.2.9\n)\n');
+  const missingPatch = run(root, '--check');
+  assert.equal(missingPatch.status, 1);
+  assert.match(missingPatch.stderr, /checked-in .*third_party\/termcp-core/);
+});

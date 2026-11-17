@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,17 +30,18 @@ import (
 )
 
 type App struct {
-	ctx         context.Context
-	core        *corepkg.Service
-	bridge      *bridge.Client
-	service     config.Manager
-	tray        *tray.Controller
-	dataDir     string
-	lifecycle   sync.Mutex
-	language    sync.RWMutex
-	uiLanguage  string
-	notifyMu    sync.Mutex
-	notifyReady bool
+	ctx          context.Context
+	core         *corepkg.Service
+	bridge       *bridge.Client
+	service      config.Manager
+	tray         *tray.Controller
+	dataDir      string
+	historyStore *storage.Store
+	lifecycle    sync.Mutex
+	language     sync.RWMutex
+	uiLanguage   string
+	notifyMu     sync.Mutex
+	notifyReady  bool
 }
 
 var interfaceSequence atomic.Uint64
@@ -76,11 +80,12 @@ func newAppWithService(core *corepkg.Service, service config.Manager) *App {
 		}
 	}
 	return &App{
-		core:       core,
-		bridge:     bridge.New(core),
-		service:    service,
-		dataDir:    dataDir,
-		uiLanguage: defaultUILanguage(),
+		core:         core,
+		bridge:       bridge.New(core),
+		service:      service,
+		dataDir:      dataDir,
+		historyStore: storage.New(dataDir),
+		uiLanguage:   defaultUILanguage(),
 	}
 }
 
@@ -155,6 +160,12 @@ func (a *App) shutdown(context.Context) {
 	if err := a.core.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		shutdownErr = err
 		slog.Error("termcp Core stop failed", "error", logging.ErrorText(err))
+	}
+	if a.historyStore != nil {
+		if err := a.historyStore.Close(); err != nil {
+			shutdownErr = err
+			slog.Error("desktop history store close failed", "error", logging.ErrorText(err))
+		}
 	}
 }
 
@@ -270,7 +281,7 @@ func (a *App) GetServiceStatus() (result model.ServiceStatus, err error) {
 func (a *App) GetSnapshot() (out model.Snapshot, err error) {
 	done := beginInterface("GetSnapshot")
 	defer func() { done(err) }()
-	out = model.Snapshot{Core: a.CoreStatus(), Connections: []model.Connection{}, Sessions: []model.Session{}, History: []model.Session{}, Forwards: []model.Forward{}, FetchedAt: time.Now().Format(time.RFC3339)}
+	out = model.Snapshot{Core: a.CoreStatus(), Connections: []model.Connection{}, Sessions: []model.Session{}, History: []model.Session{}, Forwards: []model.Forward{}, Extensions: []model.Extension{}, FetchedAt: time.Now().Format(time.RFC3339)}
 	if !out.Core.Running {
 		if out.Core.Error == "" {
 			out.Core.Error = "Core 尚未就绪"
@@ -290,13 +301,25 @@ func (a *App) GetSnapshot() (out model.Snapshot, err error) {
 		return out, requestErr
 	}
 	out.Connections = connections.Connections
+	var extensions struct {
+		Extensions []model.Extension `json:"extensions"`
+	}
+	if requestErr := a.bridge.GetJSON("/api/extensions", &extensions); requestErr != nil {
+		out.ExtensionError = requestErr.Error()
+	} else if extensions.Extensions != nil {
+		out.Extensions = extensions.Extensions
+	}
 	var sessions struct {
 		Sessions []model.Session `json:"sessions"`
 	}
 	if requestErr := a.bridge.GetJSON("/api/sessions", &sessions); requestErr != nil {
 		return out, requestErr
 	}
+	persistedShells := a.persistedShellsBySession()
 	for _, session := range sessions.Sessions {
+		if isExtensionNamespace(session.Namespace) {
+			continue
+		}
 		var shellList struct {
 			Shells []model.Shell `json:"shells"`
 		}
@@ -308,6 +331,12 @@ func (a *App) GetSnapshot() (out model.Snapshot, err error) {
 		}
 		if session.Status == "running" {
 			out.Sessions = append(out.Sessions, session)
+			if archived := archivedShells(session.Shells, persistedShells[session.ID]); len(archived) > 0 {
+				partial := session
+				partial.ArchivedShellsOnly = true
+				partial.Shells = archived
+				out.History = append(out.History, partial)
+			}
 		} else {
 			out.History = append(out.History, session)
 		}
@@ -321,15 +350,20 @@ func (a *App) GetSnapshot() (out model.Snapshot, err error) {
 	return out, nil
 }
 
-// GetConversationIndex reads the archived shell's index through Core's marks
-// API, so the GUI uses the same spans as Core's other clients.
+func isExtensionNamespace(namespace string) bool {
+	namespace = strings.TrimSpace(namespace)
+	return namespace == "ext" || strings.HasPrefix(namespace, "ext:")
+}
+
+// GetConversationIndex reads a live or retained shell's index through Core's
+// marks API, so the GUI uses the same spans as Core's other clients.
 func (a *App) GetConversationIndex(sessionID, shellID string) ([]model.HistorySpan, error) {
 	snapshot, err := a.GetSnapshot()
 	if err != nil {
 		return nil, err
 	}
 	valid := false
-	for _, session := range snapshot.History {
+	for _, session := range append(snapshot.Sessions, snapshot.History...) {
 		if session.ID != sessionID {
 			continue
 		}
@@ -341,7 +375,7 @@ func (a *App) GetConversationIndex(sessionID, shellID string) ([]model.HistorySp
 		}
 	}
 	if !valid {
-		return nil, errors.New("archived shell not found")
+		return nil, errors.New("shell not found")
 	}
 	var response struct {
 		Marks []model.HistorySpan `json:"marks"`
@@ -350,6 +384,46 @@ func (a *App) GetConversationIndex(sessionID, shellID string) ([]model.HistorySp
 		return nil, err
 	}
 	return response.Marks, nil
+}
+
+// GetActivity returns Core's cross-session action feed. An empty sessionID asks
+// for every session; limit is clamped to the range Core publishes.
+func (a *App) GetActivity(sessionID string, limit int) ([]model.ActivityEvent, error) {
+	done := beginInterface("GetActivity", "session_id", sessionID, "limit", limit)
+	var resultErr error
+	defer func() { done(resultErr) }()
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	query := url.Values{"limit": {strconv.Itoa(limit)}}
+	if strings.TrimSpace(sessionID) != "" {
+		query.Set("session_id", strings.TrimSpace(sessionID))
+	}
+	var response struct {
+		Activity []model.ActivityEvent `json:"activity"`
+	}
+	resultErr = a.bridge.GetJSON("/api/activity?"+query.Encode(), &response)
+	if response.Activity == nil {
+		response.Activity = []model.ActivityEvent{}
+	}
+	return response.Activity, resultErr
+}
+
+// GetClients returns who is attached to the embedded or system-service Core.
+func (a *App) GetClients() (result model.Clients, err error) {
+	done := beginInterface("GetClients")
+	defer func() { done(err) }()
+	err = a.bridge.GetJSON("/api/clients", &result)
+	if result.WebUI == nil {
+		result.WebUI = []model.WebUIClient{}
+	}
+	if result.MCP == nil {
+		result.MCP = []model.MCPClient{}
+	}
+	return result, err
 }
 
 func (a *App) SaveConversationLog(sessionID, shellID string) (string, error) {
@@ -363,7 +437,7 @@ func (a *App) SaveConversationLog(sessionID, shellID string) (string, error) {
 	if err != nil || destination == "" {
 		return "", err
 	}
-	source, err := os.Open(storage.New(a.dataDir).LogPath(sessionID, shellID))
+	source, err := os.Open(a.historyStore.LogPath(sessionID, shellID))
 	if err != nil {
 		return "", err
 	}
@@ -397,6 +471,66 @@ func (a *App) CreateShell(sessionID, name string) (err error) {
 	}
 	body := map[string]any{"name": strings.TrimSpace(name), "mode": "pty", "rows": 24, "cols": 100}
 	return a.bridge.DoJSON(http.MethodPost, "/api/sessions/"+url.PathEscape(sessionID)+"/shells", body, nil)
+}
+
+// DefaultDirectory uses Core's own getwd operation for remote sessions. The
+// internal profile intentionally keeps the desktop's Home-directory semantics;
+// Core's internal SFTP working directory is the process CWD, not Home.
+func (a *App) DefaultDirectory(sessionID string) (directory string, err error) {
+	done := beginInterface("DefaultDirectory", "session_id", sessionID)
+	defer func() { done(err) }()
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", errors.New("session id is required")
+	}
+	var session model.Session
+	if err = a.bridge.GetJSON("/api/sessions/"+url.PathEscape(sessionID), &session); err != nil {
+		return "", err
+	}
+	if session.SSHEndpoint == "internal" {
+		return os.UserHomeDir()
+	}
+	var reply model.APIResponse
+	err = a.bridge.DoJSON(http.MethodPost, "/api/term", map[string]any{
+		"cmd": "get " + sessionID + " file . --op getwd",
+	}, &reply)
+	if err != nil {
+		return "", err
+	}
+	body := strings.TrimSpace(reply.Body)
+	if strings.HasPrefix(body, "{") {
+		var envelope struct {
+			Code int    `json:"code"`
+			Body string `json:"body"`
+		}
+		if err = json.Unmarshal([]byte(body), &envelope); err != nil {
+			return "", fmt.Errorf("decode Core getwd reply: %w", err)
+		}
+		if envelope.Code >= http.StatusBadRequest {
+			return "", fmt.Errorf("Core getwd failed: %s", strings.TrimSpace(envelope.Body))
+		}
+		body = strings.TrimSpace(envelope.Body)
+	}
+	if parsed := parseDirectoryReply(body); parsed != "" {
+		return parsed, nil
+	}
+	return "", fmt.Errorf("Core getwd reply has no directory: %s", body)
+}
+
+func parseDirectoryReply(body string) string {
+	var structured struct {
+		Directory string `json:"directory"`
+	}
+	if json.Unmarshal([]byte(body), &structured) == nil && strings.TrimSpace(structured.Directory) != "" {
+		return strings.TrimSpace(structured.Directory)
+	}
+	for _, line := range strings.Split(body, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(key), "directory") {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (a *App) TerminateSession(sessionID string) (err error) {
@@ -531,6 +665,25 @@ func (a *App) SaveAPIResource(apiPath, suggestedName string) (destination string
 	done := beginInterface("SaveAPIResource", "path", safeAPIPath(apiPath), "suggested_extension", filepath.Ext(suggestedName))
 	defer func() { done(err) }()
 	return a.bridge.SaveAPIResource(a.ctx, apiPath, suggestedName)
+}
+
+// SaveTermcpSkill exports the Desktop-owned thin HTTP skill. It is documentation
+// only and points agents back to the running Core for live commands and API facts.
+func (a *App) SaveTermcpSkill() (destination string, err error) {
+	done := beginInterface("SaveTermcpSkill")
+	defer func() { done(err) }()
+	destination, err = runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:                "Export Termcp HTTP skill",
+		DefaultFilename:      "SKILL.md",
+		CanCreateDirectories: true,
+	})
+	if err != nil || destination == "" {
+		return destination, err
+	}
+	if err = os.WriteFile(destination, []byte(termcpSkillMarkdown), 0o600); err != nil {
+		return "", err
+	}
+	return destination, nil
 }
 
 func (a *App) CoreWebSocketURL() string {

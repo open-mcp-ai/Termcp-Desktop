@@ -19,6 +19,7 @@ const icons = {
   book: '<path d="M3 4h6a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H3zM21 4h-6a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h6z"/>',
   pin: '<path d="M9 3h6l-1 5 3 3v2H7v-2l3-3zM12 13v8"/>',
   download: '<path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/>',
+  upload: '<path d="M12 21V9m0 0 4 4m-4-4-4 4M5 4h14"/>',
   collapse: '<path d="m14 7-5 5 5 5"/>',
   expand: '<path d="m10 7 5 5-5 5"/>',
   copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',

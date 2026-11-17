@@ -1,5 +1,56 @@
 # 程序验证记录
 
+## termcp Core v0.2.9 Desktop 升级（2026-11-16）
+
+| 检查 | 结果 |
+| --- | --- |
+| 版本契约 | Desktop `0.1.3`；Core 基线 `v0.2.9`，实际源码补丁标识 `0.2.9+desktop.1`；固定上游提交 `714f8d491d0913fd7012afadc7f22f062e213839`；补丁 SHA-256 `2705165dc26906ca33dea87402e418571845c468336c997bf0f618988382b832`；`npm run check` 版本校验通过 |
+| Core API-only 阻塞 | 原版 `no_webui` 探针复现 `/api.md`、version/sessions/extensions/approvals/clients 与 WS 均为 404，`ls ext` 为 422 `not_configured`；补丁后同一探针管理 API、`/api.md`、WS 初始 `sessions` 事件和 `ls ext` 200 通过，`/`、static、themes、vendor/xterm 404 |
+| Desktop 构建标签 | Go test/vet、Wails arm64、Wails Windows amd64 均显示 `no_webui`；Linux 编译命令使用 `no_webui,webkit2_41`；三平台 `go list` 的 Core EmbedFiles 均为且仅为 `assets/api.md` |
+| Core 生命周期 | 真实 `core.New → Start → Desktop net/http` 集成通过；端口冲突返回明确 bind 错误且可再启动；停止关闭 WS、释放端口并可重启；附着模式不启动/停止外部 Core；错误版本拒绝附着 |
+| MCP 与 TERM | 外部 mcp-go 客户端完成 streamable HTTP initialize、tools/list、prompts/list（含 learn-api）、tools/call、并发调用、断开重连；SSE initialize 通过；`POST /api/term` 返回 TERM/1 结构化 envelope；`notify` 作为真实 `ui_notify` WS 帧送达 |
+| 审批 | 真实 MCP 输入触发 pending 并经 `/api/ui/ws` 推送 `approval` 事件，批准后 Shell 输出出现测试标记；MCP file write 在批准前不落盘，批准后内容一致；`GET /api/approvals/{id}` 可读取执行记录 |
+| 扩展兼容 | 旧 `kind` 仅被忽略，真实 `command/mode` 生效；旧 target 与多 targets 均列出；模板、typed holes、本地 values、preview、resident、`idle_timeout=0`、`termcp_tool` 无损往返；批量导出保留 `{{hole}}`/params 且不含本地值 |
+| URL peer | 本地 mock streamable MCP peer 可通过 `open ext` 发现和调用；`/ext/{name}/stream` initialize 通过；URL/headers 更新后旧 `mcp:<n>` handle 返回 `extension_changed`，新 handle 使用新 endpoint/header；删除后旧 handle 失效 |
+| 历史与旧数据 | 现有批量加密导入导出、旧 manifest 中归档子 Shell、Core marks/rail/output-range 回放测试继续通过；远端默认目录改由 `POST /api/term` 的 getwd 执行，internal 保持用户 Home |
+| 集成文档 | `/api.md` 与 learn-api 通过；`/skills.md` 死链已移除；Desktop 导出薄 `SKILL.md`，内容指向 `/api.md`、`/api/term`、`help`、`/sse`、`/stream` |
+| 前端检查 | 5 项发布脚本测试、50 项前端单测、Vite production build、16 项 Playwright 桌面/窄屏布局测试通过 |
+| Go 检查 | `npm run check` 的 Go 全量测试与 vet 通过；`go test -tags no_webui -race -shuffle=on ./... -count=1` 通过 |
+| Core 补丁回归 | 补丁模块 `go test -tags no_webui ./core ./internal/extensions ./internal/mcp -count=1` 最终 1069 项通过；补丁相关用例 `-race` 通过。一次全量重跑曾命中既有 `TestARefusedCloseLeavesEveryChannelAlive` 瞬时失败，单测 `-count=3` 与随后全量重跑均通过 |
+| macOS 构建 | `npm run build` 成功生成 arm64 `Termcp.app`；Go 直接构建 darwin/amd64 成功；包内 build info 显示 Core `v0.2.9 => ./third_party/termcp-core` |
+| Windows 构建 | Wails `windows/amd64` 成功生成 GUI `Termcp.exe`；build info 显示 `no_webui` 与本地补丁 replacement |
+| Linux 构建 | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags=no_webui,webkit2_41` 成功；当前 macOS 上 Wails 明确提示不支持交叉构建 Linux，必须由 Linux runner 原生构建 |
+| no-WebUI 产物证据 | Core 源码树未保留上游 HTML/JS/CSS/theme/xterm 页面资产；仅保留 `internal/webui/assets/api.md` 与 `docs/api.md`；Desktop 自有 `frontend/public/vendor/xterm` 不受影响 |
+| 未验证 | 尝试用实际 macOS `--core-service` 在临时数据目录运行，但本机 `127.0.0.1:18765` 已有真实服务占用，按隔离要求停止探针；Windows/Linux 原生启动、系统服务注册/卸载、SCM/systemd/LaunchAgent、真实 SSH/SFTP/转发、托盘和系统通知需在对应平台运行验证 |
+
+## termcp Core v0.2.8 运行时与观测集成（2026-10-27）
+
+| 检查 | 结果 |
+| --- | --- |
+| 版本契约 | Desktop 保持 `0.1.2`，`go.mod`、工具链、后端与前端 bundled Core 字段统一为 Go `1.27.3` / Core `v0.2.8`；版本检查通过 |
+| TERM/1 运行时 | 真实 MCP Streamable HTTP 客户端完成 initialize 与 tools/list，仅发现 `term`；`POST /api/term` 返回命令指南 |
+| 生命周期 | 内嵌扩展协调器随 Core 启停；UINotifier、连接者通知、SSH server、MCP server 与存储按顺序释放；Core、桥接与模型包 race 测试通过 |
+| 通知清理 | 已移除 `/api/notifications`、`shell_notify`、Inspector 通知标签及演示夹具；审批角标、应用内提示和 Wails 系统通知仍保留 |
+| Runtime 观测 | `GET /api/activity` 与 `GET /api/clients` 经 Go 模型进入 Runtime 页面；WebSocket `sessions` 帧更新连接者，`shell_activity` 与审批事件刷新活动 |
+| 活动定位 | 点击活动使用 session/shell/byte 打开只读历史，Core rail 将字节定位到终端行并显示焦点；1280/640 宽度浏览器布局与跳转测试通过 |
+| 完整检查 | `npm run check` 通过，包含 39 项前端单元测试、15 项 Playwright 布局测试、Vite build、全部 Go 测试与 `go vet ./...` |
+
+## 历史记录终端回放与颜色对齐（2026-10-13）
+
+- 根因：原历史页的事件行最小列宽超过左侧面板宽度，偏移数字被裁切；输入事件只有标记，点击后不能回放命令。单段纯文本预览也无法保留完整终端的换行、光标编辑与滚动上下文。
+- 重构：按 Termcp WebUI 的方式从日志开头连续回放，使用 Core `/rail` 给出的可见行映射，在实际终端屏幕边缘标记黄色人工输入、粉色 AI 输入、绿色输出。详情与标签可展开，窄窗口使用带提示的图标操作。
+- 整行染色：工具栏提供默认关闭的开关，记住用户选择；开启时以同一行映射为整行添加淡色背景，支持三种来源、滚动和缩放，不拦截文字选择。窄窗口的 Shell 与操作按钮共用一行，图例独立一行。
+- 浏览器回归：新增 6 项历史测试，覆盖输入回显、三色标记、只读行为、1280/800/640 宽度与 720/480 高度、字体和主题、长日志分页/滚动/换行、重绘保留滚动、延迟 Shell 响应、ANSI/回车/退格、中文与 emoji 跨分页、加载失败后重新加载。历史与原有侧栏共 11 项浏览器测试通过。
+- 单元与集成验证：27 项前端测试通过；真实归档 Core 通过桌面 API 桥在 80/30 列下返回有效的行字节区间与来源标记；版本检查、发布脚本、前端构建、Go 测试与 `go vet` 通过。
+
+## 侧边栏展开溢出修复（2026-10-12，issue #17）
+
+- 根因：主体网格未约束行高，固定侧边栏展开较长的 Shell 列表时，`auto` 行高按内容增长，将底部 Shell 标签栏和设置导航推到窗口外。
+- 修复：主体网格使用 `minmax(0, 1fr)` 分配窗口剩余高度，长资源树由现有 `.tree-scroll` 滚动。
+- 浏览器回归：实际展开含 30 个额外 Shell 的会话，验证 1280、800、640 宽度、720/480 高度、分组折叠/展开以及固定/浮动/收起侧栏；底栏始终可见，最后一个 Shell 可滚动到达。修复前 1280 和 800 宽度测试失败，修复后三项通过。
+- 运行方式：先执行 `npm exec --prefix frontend -- playwright install chromium`，再执行 `npm --prefix frontend run test:layout`；Linux CI 自动安装 Chromium 并运行回归测试。
+- 完整检查：`npm run check` 通过，包括版本校验、4 项发布脚本测试、27 项前端单元测试、Vite build、Go 测试和 `go vet`。
+
 ## termcp Core v0.2.5 集成（2026-10-02）
 
 | 检查 | 结果 |

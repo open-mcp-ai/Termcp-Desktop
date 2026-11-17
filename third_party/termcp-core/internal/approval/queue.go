@@ -1,0 +1,568 @@
+// Package approval gates terminal input behind N-person approval.
+//
+// The model is one-way: every input reaches a shell as a *command line* that
+// already passed approval. A caller writes text and may attach named keys
+// (ctrl+c, enter, …); the queue holds the whole submission until Need distinct
+// approvers accept it, and only then does the gate hand the bytes to the shell.
+// Raw character streams are not representable here on purpose — they cannot be
+// reviewed byte by byte, so the WebSocket input path is dropped instead of
+// being squeezed through this queue.
+//
+// Nothing in this package fails open: an expired request, a rejected request, a
+// queue that lost its session, and a session whose approval mode was turned off
+// mid-flight all end with zero bytes written.
+package approval
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/open-mcp-ai/termcp/internal/uid"
+
+	"github.com/open-mcp-ai/termcp/internal/clock"
+)
+
+var (
+	ErrNotApproved             = errors.New("approval request is not approved")
+	ErrExecutionAlreadyStarted = errors.New("approval execution has already started")
+	ErrExecutionNotRunning     = errors.New("approval execution is not running")
+	ErrInvalidExecutionState   = errors.New("invalid approval execution state")
+)
+
+// Queue holds the pending requests for one session. A session's shells share
+// one queue, which matches the scope of the approval switch: turning approval
+// mode on for a session covers every shell in it.
+type Queue struct {
+	mu       sync.Mutex
+	session  string
+	need     int
+	timeout  time.Duration
+	byID     map[string]*Request
+	byShell  map[string][]string // shellID -> request ids, oldest first
+	onChange func(Request)       // invoked without the lock held
+	stopped  bool
+}
+
+// Options configures a Queue.
+type Options struct {
+	// Need is retained for the JSON shape but is always 1: review has one
+	// decision, and the field is kept so a stored manifest from the multi-reviewer
+	// version still parses. A caller that wants no gate must not create a queue.
+	Need int
+	// Timeout expires a pending request. Zero means no timeout, which is
+	// intended for tests only — a request that never expires holds a waiter
+	// until the process ends.
+	Timeout time.Duration
+	// OnChange, when set, is called after every state transition (including
+	// submission) with a snapshot of the request. It runs without the queue
+	// lock, so it may call back into the queue. Used to push approval events to
+	// waiting agents and open browser tabs.
+	OnChange func(Request)
+}
+
+// NewQueue creates the queue for one session.
+func NewQueue(sessionID string, opts Options) *Queue {
+	// One decision resolves a request. Need is not taken from opts: review mode
+	// has a single reviewer, and honouring a stale count would leave requests that
+	// no one can ever resolve.
+	const need = 1
+	return &Queue{
+		session:  sessionID,
+		need:     need,
+		timeout:  opts.Timeout,
+		byID:     map[string]*Request{},
+		byShell:  map[string][]string{},
+		onChange: opts.OnChange,
+	}
+}
+
+// SessionID reports which session this queue gates.
+func (q *Queue) SessionID() string { return q.session }
+
+// Need reports the configured approver threshold.
+func (q *Queue) Need() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.need
+}
+
+// Submit enqueues a command line and returns its id. The caller either polls
+// Get or blocks in Wait.
+//
+// A submission with neither text nor keys is rejected: an empty approval would
+// let an agent spend an approver's attention on nothing.
+// Submission is one operation waiting for a decision. It generalises the
+// original command line so file transfers and port forwards use the same queue.
+type Submission struct {
+	// Kind says what approving this does. Empty is treated as KindShellInput.
+	Kind Kind
+	// ShellID anchors the request to a shell when one applies (terminal input).
+	// File and forward operations are session-scoped, so it may be empty.
+	ShellID string
+	Source  string
+	// Summary is the reviewer-facing one-liner. Required: a request a human
+	// cannot read is one they cannot decide.
+	Summary string
+	// Text and Keys carry a command line (KindShellInput).
+	Text string
+	Keys []string
+	// Payload is the kind-specific operation for the executor to replay.
+	Payload []byte
+}
+
+// Submit queues one operation and returns its id. The caller either polls Get
+// or blocks in Wait.
+//
+// An empty submission is rejected: an approval with nothing in it would let an
+// agent spend a reviewer's attention on nothing.
+func (q *Queue) Submit(sub Submission) (string, error) {
+	if sub.Kind == "" {
+		sub.Kind = KindShellInput
+	}
+	if sub.Kind == KindShellInput && sub.Text == "" && len(sub.Keys) == 0 {
+		return "", errors.New("nothing to approve: both text and keys are empty")
+	}
+	if sub.Kind != KindShellInput && len(sub.Payload) == 0 {
+		return "", fmt.Errorf("nothing to approve: a %s request needs a payload", sub.Kind)
+	}
+	if strings.TrimSpace(sub.Summary) == "" {
+		return "", errors.New("nothing to approve: a request needs a summary a reviewer can read")
+	}
+
+	now := clock.Now()
+	r := &Request{
+		ID:        uid.UUID(),
+		SessionID: q.session,
+		ShellID:   sub.ShellID,
+		Source:    sub.Source,
+		Kind:      sub.Kind,
+		Summary:   sub.Summary,
+		Text:      sub.Text,
+		Keys:      append([]string(nil), sub.Keys...),
+		Payload:   append([]byte(nil), sub.Payload...),
+		CreatedAt: now,
+		State:     Pending,
+		done:      make(chan struct{}),
+	}
+
+	q.mu.Lock()
+	if q.stopped {
+		q.mu.Unlock()
+		return "", errors.New("approval queue is closed")
+	}
+	if q.timeout > 0 {
+		r.ExpiresAt = now + q.timeout.Milliseconds()
+	}
+	r.Need = q.need
+	q.byID[r.ID] = r
+	if sub.ShellID != "" {
+		q.byShell[sub.ShellID] = append(q.byShell[sub.ShellID], r.ID)
+	}
+	// Need is clamped to >= 1 in NewQueue, so NeedsMore() is never 0 here.
+	// That matters: a request that already met its threshold could never gain
+	// another state change, and Wait would block forever.
+	snap := r.clone()
+	q.mu.Unlock()
+
+	q.notify(snap)
+	return r.ID, nil
+}
+
+// SubmitShellInput is the command-line case, kept as its own method because it
+// is the common one and its two-argument shape is what the terminal paths have.
+func (q *Queue) SubmitShellInput(shellID, source, text string, keys []string) (string, error) {
+	return q.Submit(Submission{
+		Kind:    KindShellInput,
+		ShellID: shellID,
+		Source:  source,
+		Summary: ShellInputSummary(text, keys),
+		Text:    text,
+		Keys:    keys,
+	})
+}
+
+// Get returns a snapshot of one request.
+func (q *Queue) Get(id string) (Request, error) {
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok {
+		q.mu.Unlock()
+		return Request{}, ErrNotFound
+	}
+	expired := q.expireIfDueLocked(r)
+	snap := r.clone()
+	q.mu.Unlock()
+	if expired {
+		q.notify(snap)
+	}
+	return snap, nil
+}
+
+// List returns every request, pending first, so the API can show a worklist
+// with the actionable entries at the top.
+func (q *Queue) List() []Request {
+	q.mu.Lock()
+	// A worklist that still shows an expired request as actionable is a worklist
+	// that lies about what can be approved (issue #216).
+	var due []Request
+	for _, r := range q.byID {
+		if q.expireIfDueLocked(r) {
+			due = append(due, r.clone())
+		}
+	}
+	out := make([]Request, 0, len(q.byID))
+	for _, r := range q.byID {
+		if r.State == Pending {
+			out = append(out, r.clone())
+		}
+	}
+	for _, r := range q.byID {
+		if r.State != Pending {
+			out = append(out, r.clone())
+		}
+	}
+	q.mu.Unlock()
+	for _, snap := range due {
+		q.notify(snap)
+	}
+	return out
+}
+
+// ListForShell returns one shell's requests, oldest first.
+func (q *Queue) ListForShell(shellID string) []Request {
+	q.mu.Lock()
+	var due []Request
+	ids := q.byShell[shellID]
+	out := make([]Request, 0, len(ids))
+	for _, id := range ids {
+		if r, ok := q.byID[id]; ok {
+			if q.expireIfDueLocked(r) {
+				due = append(due, r.clone())
+			}
+			out = append(out, r.clone())
+		}
+	}
+	q.mu.Unlock()
+	for _, snap := range due {
+		q.notify(snap)
+	}
+	return out
+}
+
+// Approve accepts the request: one reviewer is enough.
+//
+// The decision is the reviewer's act, recorded by the server, not a name typed
+// into a box. A typed name neither proves nor grants anything under a single
+// deployment token, so requiring one was friction that produced a claim rather
+// than a fact.
+func (q *Queue) Approve(id string) (Request, error) {
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok {
+		q.mu.Unlock()
+		return Request{}, ErrNotFound
+	}
+	// An expired request is not pending, whatever the map still says (issue #216).
+	if q.expireIfDueLocked(r) {
+		snap := r.clone()
+		q.mu.Unlock()
+		q.notify(snap)
+		return snap, ErrTimeout
+	}
+	if r.State == Expired {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrTimeout
+	}
+	if r.State != Pending {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrNotPending
+	}
+	r.Approvals = append(r.Approvals, LocalReviewer)
+	if r.NeedsMore() == 0 {
+		q.resolveLocked(r, Approved, "", "")
+	}
+	snap := r.clone()
+	q.mu.Unlock()
+
+	q.notify(snap)
+	return snap, nil
+}
+
+// Reject refuses the request. One rejection is final: the request gates a
+// command line, and saying no is enough to stop it.
+func (q *Queue) Reject(id, reason string) (Request, error) {
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok {
+		q.mu.Unlock()
+		return Request{}, ErrNotFound
+	}
+	// A rejection after the deadline is still a refusal, but the honest state is
+	// Expired: the window closed before a human decided (issue #216).
+	if q.expireIfDueLocked(r) {
+		snap := r.clone()
+		q.mu.Unlock()
+		q.notify(snap)
+		return snap, ErrTimeout
+	}
+	if r.State == Expired {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrTimeout
+	}
+	if r.State != Pending {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrNotPending
+	}
+	q.resolveLocked(r, Rejected, "", reason)
+	snap := r.clone()
+	q.mu.Unlock()
+
+	q.notify(snap)
+	return snap, nil
+}
+
+// Cancel drops a request without a human decision (session died, shell closed,
+// approval mode switched off). It is a no-op on an already-terminal request.
+func (q *Queue) Cancel(id, reason string) {
+	if id == "" {
+		return
+	}
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok || r.State != Pending {
+		q.mu.Unlock()
+		return
+	}
+	q.resolveLocked(r, Cancelled, "", reason)
+	snap := r.clone()
+	q.mu.Unlock()
+
+	q.notify(snap)
+}
+
+// CancelAll drops every pending request, for the same reasons as Cancel. Used
+// when a session ends or approval mode is turned off, where a request left
+// pending could otherwise be approved later and write into a shell that is gone.
+func (q *Queue) CancelAll(reason string) {
+	for _, r := range q.cancelPending(reason) {
+		q.notify(r)
+	}
+}
+
+// Close permanently stops the queue: pending requests are cancelled and further
+// submissions are refused. The session calls this on release.
+func (q *Queue) Close(reason string) {
+	q.mu.Lock()
+	q.stopped = true
+	q.mu.Unlock()
+	for _, r := range q.cancelPending(reason) {
+		q.notify(r)
+	}
+}
+
+// cancelPending cancels every pending request and returns their snapshots.
+func (q *Queue) cancelPending(reason string) []Request {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var out []Request
+	now := clock.Now()
+	for _, r := range q.byID {
+		if r.State == Pending {
+			q.resolveLocked(r, Cancelled, "", reason)
+			out = append(out, r.clone())
+			continue
+		}
+		// Approval and execution are separate. Closing the gate cannot undo an
+		// approval that already started, but it must not leave a running
+		// execution looking live after its session is gone.
+		if r.State == Approved && r.Execution != nil && r.Execution.State == ExecutionRunning {
+			r.Execution.State = ExecutionUnknown
+			r.Execution.FinishedAt = now
+			r.Execution.Error = reason
+			out = append(out, r.clone())
+		}
+	}
+	return out
+}
+
+// Wait blocks until the request reaches a terminal state or its deadline
+// passes, then returns the final snapshot.
+func (q *Queue) Wait(id string) (Request, error) {
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok {
+		q.mu.Unlock()
+		return Request{}, ErrNotFound
+	}
+	if r.State.Terminal() {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, nil
+	}
+	done := r.done
+	var wait time.Duration
+	if r.ExpiresAt > 0 {
+		wait = time.Duration(r.ExpiresAt-clock.Now()) * time.Millisecond
+		if wait < 0 {
+			wait = 0
+		}
+	}
+	q.mu.Unlock()
+
+	if r.ExpiresAt == 0 {
+		// No deadline: the only way out is a decision.
+		<-done
+		return q.Get(id)
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return q.Get(id)
+	case <-timer.C:
+		return q.expire(id)
+	}
+}
+
+// BeginExecution records that replaying an approved request has started. It
+// does not notify listeners: the approval itself was already announced, and an
+// intermediate "running" update would only flicker in the reviewer UI.
+func (q *Queue) BeginExecution(id string) (Request, error) {
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok {
+		q.mu.Unlock()
+		return Request{}, ErrNotFound
+	}
+	if r.State != Approved {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrNotApproved
+	}
+	if r.Execution != nil {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrExecutionAlreadyStarted
+	}
+	r.Execution = &Execution{
+		State:     ExecutionRunning,
+		StartedAt: clock.Now(),
+	}
+	snap := r.clone()
+	q.mu.Unlock()
+	return snap, nil
+}
+
+// FinishExecution records the terminal result of replaying an approved
+// request. Shell input may end submitted (bytes written) or failed; non-shell
+// operations may end succeeded or failed. Unknown is valid for either kind
+// when the executor cannot trust the observation.
+func (q *Queue) FinishExecution(id string, state ExecutionState, detail string) (Request, error) {
+	if state != ExecutionSubmitted && state != ExecutionSucceeded &&
+		state != ExecutionFailed && state != ExecutionUnknown {
+		return Request{}, ErrInvalidExecutionState
+	}
+
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok {
+		q.mu.Unlock()
+		return Request{}, ErrNotFound
+	}
+	if r.State != Approved || r.Execution == nil || r.Execution.State != ExecutionRunning {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrExecutionNotRunning
+	}
+	isShellInput := r.Kind == "" || r.Kind == KindShellInput
+	if isShellInput && state == ExecutionSucceeded {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrInvalidExecutionState
+	}
+	if !isShellInput && state == ExecutionSubmitted {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrInvalidExecutionState
+	}
+	r.Execution.State = state
+	r.Execution.FinishedAt = clock.Now()
+	r.Execution.Error = strings.TrimSpace(detail)
+	snap := r.clone()
+	q.mu.Unlock()
+
+	q.notify(snap)
+	return snap, nil
+}
+
+// expire transitions a still-pending request whose deadline passed. It reports
+// the truth rather than overwriting a decision that won the race.
+func (q *Queue) expire(id string) (Request, error) {
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok {
+		q.mu.Unlock()
+		return Request{}, ErrNotFound
+	}
+	if r.State != Pending || r.ExpiresAt == 0 || clock.Now() < r.ExpiresAt {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, nil
+	}
+	q.resolveLocked(r, Expired, "", "")
+	snap := r.clone()
+	q.mu.Unlock()
+
+	q.notify(snap)
+	return snap, ErrTimeout
+}
+
+// expireIfDue moves a pending request to Expired when its deadline has passed, and
+// reports whether it did. The queue lock must be held.
+//
+// EXPIRY IS A FACT ABOUT THE CLOCK, NOT AN EVENT ONLY Wait CAN DELIVER (issue #216).
+// The transition used to be driven exclusively by Wait's timer, but the review flow
+// answers 202 immediately and creates no waiter — so a request nobody blocked on
+// stayed Pending forever, and a late Approve returned 200 and executed the write.
+// That made timeout_seconds a promise the server did not keep, in exactly the case
+// it exists for.
+//
+// Every reader and every decision calls this first, so a request is expired by the
+// time anyone can observe or act on it.
+func (q *Queue) expireIfDueLocked(r *Request) bool {
+	if r.State != Pending || r.ExpiresAt == 0 || clock.Now() < r.ExpiresAt {
+		return false
+	}
+	q.resolveLocked(r, Expired, "", "")
+	return true
+}
+
+// resolveLocked performs the one-way transition to a terminal state and signals
+// waiters. The queue lock must be held.
+func (q *Queue) resolveLocked(r *Request, state State, by, reason string) {
+	r.State = state
+	r.DecidedBy = by
+	r.Reason = reason
+	r.ResolvedAt = clock.Now()
+	if r.done != nil {
+		close(r.done)
+		r.done = nil
+	}
+}
+
+// notify runs the change hook outside the queue lock, so a hook that calls back
+// into the queue cannot deadlock.
+func (q *Queue) notify(r Request) {
+	if q.onChange == nil {
+		return
+	}
+	q.onChange(r)
+}

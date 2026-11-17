@@ -27,15 +27,15 @@ jobs:
           - name: Linux amd64
             os: ubuntu-24.04
             slug: linux-amd64
-            go-flags: -tags=webkit2_41
+            go-flags: -tags=no_webui,webkit2_41
           - name: Windows amd64
             os: windows-latest
             slug: windows-amd64
-            go-flags: ''
+            go-flags: -tags=no_webui
           - name: macOS arm64
             os: macos-15
             slug: macos-arm64
-            go-flags: ''
+            go-flags: -tags=no_webui
 
     steps:
       - name: Check out source
@@ -78,10 +78,20 @@ jobs:
       - name: Run frontend unit tests
         run: npm --prefix frontend test
 
+      - name: Run sidebar and history browser regression tests
+        if: runner.os == 'Linux'
+        run: |
+          npm exec --prefix frontend -- playwright install --with-deps chromium
+          npm --prefix frontend run test:layout
+
       - name: Check and build frontend
         run: |
           npm --prefix frontend run check
           npm --prefix frontend run build
+
+      - name: Verify Core no-WebUI assets
+        shell: bash
+        run: node scripts/verify-core-assets.mjs
 
       - name: Run Go unit tests with coverage
         shell: bash
@@ -93,17 +103,17 @@ jobs:
 
       - name: Build Linux application
         if: runner.os == 'Linux'
-        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform linux/amd64 -tags webkit2_41
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform linux/amd64 -tags no_webui,webkit2_41
 
       - name: Build Windows application and installer
         if: runner.os == 'Windows'
         shell: pwsh
-        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform windows/amd64 -nsis
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform windows/amd64 -nsis -tags no_webui
 
       - name: Build macOS application
         if: runner.os == 'macOS'
         run: |
-          go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform darwin/arm64
+          go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -platform darwin/arm64 -tags no_webui
           staging="$(mktemp -d)"
           cp -R build/bin/Termcp.app "$staging/Termcp.app"
           ln -s /Applications "$staging/Applications"

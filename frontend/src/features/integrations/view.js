@@ -26,11 +26,10 @@ export function integrationPage() {
   const sse = `${base}/sse`;
   const stream = `${base}/stream`;
   const apiDocs = `${base}/api.md`;
-  const skillDocs = `${base}/skills.md`;
   const args = stdioArgs(base);
   const clientJSON = type => JSON.stringify({ mcpServers: { termcp: { type, url: type === 'sse' ? sse : stream } } }, null, 2);
   const stdioJSON = JSON.stringify({ mcpServers: { termcp: { command: 'termcp', args } } }, null, 2);
-  const installSkill = `DIR=~/.claude/skills && mkdir -p "$DIR/termcp" && curl -fsS ${skillDocs} -o "$DIR/termcp/SKILL.md"`;
+  const exportSkill = button(`${icon('download', 14)}Export SKILL.md`, 'export-termcp-skill');
   return `<div class="integration-page">
     ${header('API / MCP / SKILLS', 'TERMCP INTEGRATIONS', button(`${icon('collapse', 14)}Back to previous view`, 'close-integrations'))}
     <p class="integration-lead">Copy connection addresses and client configuration for this Core instance.</p>
@@ -42,8 +41,8 @@ export function integrationPage() {
     </div><p class="integration-note">Both transports expose the same tools. Choose the endpoint that matches your client's transport.</p></section>
 
     <section id="integration-skill" class="integration-section"><h2>2. Agent docs &amp; skill</h2><div class="integration-grid">
-      <article class="integration-card"><h3>Documentation</h3><p>Read the REST and WebSocket reference, or install the curl skill without an MCP client.</p>${endpoint('API reference · api.md', apiDocs)}${endpoint('Agent skill · skills.md', skillDocs)}</article>
-      <article class="integration-card"><h3>Install the HTTP skill</h3><p>Save the skill as <code>termcp/SKILL.md</code>. Agents following the shared convention use <code>~/.agents/skills</code>.</p>${snippet('Claude Code', installSkill)}</article>
+      <article class="integration-card"><h3>Documentation</h3><p>Read the current REST and WebSocket contract from this Core instance. MCP clients also receive the <code>learn-api</code> prompt.</p>${endpoint('API reference · api.md', apiDocs)}${endpoint('TERM guide · POST /api/term', `${base}/api/term`)}</article>
+      <article class="integration-card"><h3>HTTP skill export</h3><p>The Desktop-owned skill points agents to <code>/api.md</code>, <code>/api/term</code>, <code>help</code>, and the MCP endpoints.</p><div class="integration-actions">${exportSkill}</div>${snippet('Install location', '~/.agents/skills/termcp/SKILL.md')}</article>
     </div></section>
 
     <section id="integration-clients" class="integration-section"><h2>3. Client config</h2><div class="integration-grid">

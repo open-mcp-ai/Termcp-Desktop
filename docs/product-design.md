@@ -52,7 +52,9 @@ GUI 应提供两种接入模式：
 | 会话列表、新建、改名 | 会话 | GET/POST /api/sessions；PATCH /api/sessions/{id} | 已接入 |
 | 结束会话并保留历史 | 会话 / 工作台 | POST /api/sessions/{id}/terminate | 已接入 |
 | 删除会话并清理历史 | 会话管理 | DELETE /api/sessions/{id}，与 terminate 语义分开 | 已接入 |
-| 多 Shell 创建、关闭 | 工作台 | GET/POST /api/sessions/{id}/shells；DELETE /api/shells/{id} | 已接入 |
+| 多 Shell 创建、归档关闭 | 工作台 | GET/POST /api/sessions/{id}/shells；POST /api/shells/{id}/archive | 已接入；归档后保留历史与结束原因 |
+| 主机配置批量导入/导出 | 主机配置 | GET/POST /api/connections/batch；`X-Termcp-Password` | 已接入选择/全部导出、加密文件与逐 Host 导入结果 |
+| 扩展状态 | 独立 Extensions 页 | GET /api/extensions；WebSocket `extensions` | 已接入实时状态、句柄打开与内部会话隔离 |
 | PTY 输入、输出、尺寸变化 | 工作台 | WebSocket /api/ui/ws；使用真实 Shell ID，协议见 ws.go | xterm、历史恢复、输入和 resize 已接入 |
 | 会话变更、人工通知推送 | 全局 / 工作台 | 同一 WebSocket 的 sessions / notify_user 消息 | 已接入 |
 | 多终端分屏 / 平铺 | 工作台布局 | 多 Shell 订阅 + 各窗格 resize | 四窗格、左右/上下/平铺、比例、最大化和持久化已完成 |
@@ -60,7 +62,7 @@ GUI 应提供两种接入模式：
 | 本机连接 | 连接配置 | internal 配置 | 已接入 |
 | 浏览文件、上传下载、重命名、删除、建目录 | 会话文件页 | /api/sessions/{id}/files 及 download/upload/dir 路由 | 已接入 |
 | Local / Remote / Dynamic 转发 | 会话转发页 | GET/POST /api/sessions/{id}/forwards；DELETE /api/forwards/{id} | 已接入 |
-| 通知规则查看与移除 | 通知规则 | GET /api/notifications；DELETE /api/notifications/{id} | 已接入；规则继续由 MCP 创建 |
+| 运行时观测 | Agent 活动与连接者 | GET /api/activity；GET /api/clients；WebSocket `clients`/`mcp_clients` | 已接入独立 Runtime 页面 |
 | AI 操作审批 | 设置、连接详情、会话详情、审批列表 | 连接 `default_approval`；PATCH /api/sessions/{id}/approval；GET/POST /api/approvals；WebSocket approval | 已接入；默认关闭，可按全局和连接设置，运行中会话可单独切换 |
 | 已结束会话和对话索引 | 历史记录 | /api/sessions；本机 log.jsonl；/api/shells/{id}/output-range | 已接入 |
 | 资源标签 | 连接、会话、Shell、历史 | 桌面端本地存储 | 已接入编辑和筛选 |

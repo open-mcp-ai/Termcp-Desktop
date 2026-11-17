@@ -1,0 +1,242 @@
+.observability-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.observability-metrics > div {
+  min-width: 0;
+  padding: 16px 18px;
+  border-right: 1px solid var(--line);
+}
+
+.observability-metrics > div:last-child {
+  border-right: 0;
+}
+
+.observability-metrics small {
+  display: block;
+  color: var(--muted);
+  font: 8px/1.4 monospace;
+  letter-spacing: 1px;
+}
+
+.observability-metrics strong {
+  display: block;
+  margin-top: 8px;
+  overflow: hidden;
+  color: var(--text);
+  font: 19px/1.2 monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.observability-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(270px, 0.85fr);
+  gap: 28px;
+  padding-top: 24px;
+}
+
+.observability-section {
+  min-width: 0;
+}
+
+.observability-section > header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 46px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.observability-section > header span {
+  color: var(--accent);
+  font: 8px monospace;
+  letter-spacing: 1.2px;
+}
+
+.observability-section > header h2 {
+  margin: 5px 0 0;
+  font-size: 15px;
+}
+
+.observability-section > header label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.observability-section select {
+  min-width: 150px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 8px;
+  font-size: 9px;
+}
+
+.activity-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.observability-activity {
+  width: 100%;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+}
+
+.observability-activity:hover,
+.observability-activity:focus-visible {
+  background: var(--accent-soft);
+}
+
+.activity-source {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--accent);
+  font: 8px monospace;
+}
+
+.activity-source.ai {
+  border-color: #d5a8c7;
+  color: #9b4d7b;
+}
+
+.activity-source.system {
+  border-color: #e0c794;
+  color: #8a6b27;
+}
+
+.activity-copy {
+  min-width: 0;
+}
+
+.activity-copy b,
+.activity-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-copy b {
+  font-size: 10px;
+}
+
+.activity-copy small {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.observability-activity code {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.client-section h3 {
+  display: flex;
+  justify-content: space-between;
+  margin: 20px 0 8px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.client-section h3 em {
+  color: var(--accent);
+  font-style: normal;
+  font-family: monospace;
+}
+
+.observability-client {
+  min-height: 53px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.client-kind {
+  padding: 4px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--accent);
+  text-align: center;
+  font: 7px monospace;
+}
+
+.client-kind.mcp {
+  color: #9b4d7b;
+}
+
+.observability-client > div {
+  min-width: 0;
+}
+
+.observability-client b,
+.observability-client small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.observability-client b {
+  font-size: 9px;
+}
+
+.observability-client small {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+@media (max-width: 920px) {
+  .observability-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 660px) {
+  .observability-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .observability-metrics > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .observability-metrics > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .observability-section > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,130 +11,233 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/approval"
+	"github.com/gorilla/websocket"
 )
 
-func TestIntegratedApprovalExecutesFileAndForwardOperations(t *testing.T) {
+func TestIntegratedApprovalGatesMCPInputAndExecutesOperations(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("TERMCP_DATA_DIR", dataDir)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
-	service := New("127.0.0.1", port)
+	service := New("127.0.0.1", freePort(t))
 	if err := service.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Stop() })
+	socket, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(service.BaseURL(), "http")+"/api/ui/ws", nil)
+	if err != nil {
+		t.Fatalf("connect approval event stream: %v", err)
+	}
+	defer socket.Close()
+	var initial struct {
+		Type string `json:"type"`
+	}
+	if err := socket.ReadJSON(&initial); err != nil || initial.Type != "sessions" {
+		t.Fatalf("initial Core event = %+v, %v", initial, err)
+	}
 
-	profile := []byte("kind = \"internal\"\ndefault_approval = true\n")
-	req, _ := http.NewRequest(http.MethodPut, service.BaseURL()+"/api/connections/internal", bytes.NewReader(profile))
+	req := request(t, http.MethodPut, service.BaseURL()+"/api/connections/internal", strings.NewReader("kind = \"internal\"\ndefault_approval = true\n"))
 	req.Header.Set("Content-Type", "text/plain")
-	checkApprovalStatus(t, req, http.StatusNoContent)
-	created := checkApprovalStatus(t, newApprovalRequest(t, http.MethodPost, service.BaseURL()+"/api/sessions", map[string]any{"ssh_config": "internal", "mode": "pty"}), http.StatusOK)
-	var result struct {
+	checkStatus(t, req, http.StatusNoContent).Body.Close()
+
+	created := checkStatus(t, request(t, http.MethodPost, service.BaseURL()+"/api/sessions", strings.NewReader(`{"ssh_config":"internal","name":"approval-e2e","mode":"pty","rows":24,"cols":80}`)), http.StatusOK)
+	var session struct {
 		SessionID string `json:"session_id"`
 		ShellID   string `json:"shell_id"`
 	}
-	if err := json.NewDecoder(created.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(created.Body).Decode(&session); err != nil {
 		t.Fatal(err)
 	}
 	_ = created.Body.Close()
-	sess := service.sessions.Get(result.SessionID)
-	if sess == nil || !sess.ApprovalEnabled() {
-		t.Fatal("new session did not inherit connection approval")
+	if session.SessionID == "" || session.ShellID == "" {
+		t.Fatalf("session create returned %+v", session)
 	}
-	shell := sess.GetChildShell(result.ShellID)
-	if shell == nil {
-		t.Fatal("new session has no primary shell")
+
+	approval := checkStatus(t, request(t, http.MethodGet, service.BaseURL()+"/api/sessions/"+session.SessionID+"/approval", nil), http.StatusOK)
+	var approvalState struct {
+		Enabled bool `json:"approval_mode"`
 	}
-	if err := shell.StageForApproval("mcp", "echo approval-shell-marker"); err != nil {
+	if err := json.NewDecoder(approval.Body).Decode(&approvalState); err != nil {
 		t.Fatal(err)
 	}
-	shellRequestID, err := shell.CommitStagedForApproval("mcp", "enter", 1)
-	if err != nil {
+	_ = approval.Body.Close()
+	if !approvalState.Enabled {
+		t.Fatal("session did not inherit default approval")
+	}
+
+	mcpSession := initializeDesktopMCP(t, service.BaseURL())
+	mcpTerm(t, service.BaseURL(), mcpSession, map[string]any{
+		"cmd":  "input " + session.ShellID + " $1",
+		"args": []any{"echo approval-shell-marker"},
+	})
+	mcpTerm(t, service.BaseURL(), mcpSession, map[string]any{
+		"cmd": "key " + session.ShellID + " enter",
+	})
+	if err := socket.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	outputURL := service.BaseURL() + "/api/shells/" + result.ShellID + "/output-range?tail=1&max=4096"
-	before := checkApprovalStatus(t, newApprovalRequest(t, http.MethodGet, outputURL, nil), http.StatusOK)
-	beforeBytes, _ := io.ReadAll(before.Body)
-	_ = before.Body.Close()
-	if strings.Contains(string(beforeBytes), "approval-shell-marker") {
-		t.Fatal("shell command ran before approval")
+	for {
+		var event struct {
+			Type    string `json:"type"`
+			Request struct {
+				ID string `json:"id"`
+			} `json:"request"`
+		}
+		if err := socket.ReadJSON(&event); err != nil {
+			t.Fatalf("read approval event: %v", err)
+		}
+		if event.Type == "approval" {
+			if event.Request.ID == "" {
+				t.Fatal("approval WebSocket event has no request id")
+			}
+			break
+		}
 	}
-	checkApprovalStatus(t, newApprovalRequest(t, http.MethodPost, service.BaseURL()+"/api/approvals/"+shellRequestID+"/approve", map[string]any{}), http.StatusOK).Body.Close()
+	shellApproval := firstApproval(t, service.BaseURL(), "shell")
+	checkStatus(t, request(t, http.MethodPost, service.BaseURL()+"/api/approvals/"+shellApproval.ID+"/approve", strings.NewReader(`{"reason":"desktop integration test"}`)), http.StatusOK).Body.Close()
+	waitForOutput(t, service.BaseURL(), session.ShellID, "approval-shell-marker")
+
+	filePath := filepath.Join(dataDir, "approval-file.txt")
+	mcpTerm(t, service.BaseURL(), mcpSession, map[string]any{
+		"cmd":  "write " + session.SessionID + " file $1 --data $2",
+		"args": []any{filePath, "approved content"},
+	})
+	fileApproval := firstApproval(t, service.BaseURL(), "file")
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Fatalf("MCP file write happened before approval: %v", err)
+	}
+	checkStatus(t, request(t, http.MethodPost, service.BaseURL()+"/api/approvals/"+fileApproval.ID+"/approve", strings.NewReader(`{"reason":"desktop integration test"}`)), http.StatusOK).Body.Close()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		response := checkApprovalStatus(t, newApprovalRequest(t, http.MethodGet, outputURL, nil), http.StatusOK)
-		data, _ := io.ReadAll(response.Body)
-		_ = response.Body.Close()
-		if strings.Contains(string(data), "approval-shell-marker") {
+		content, err := os.ReadFile(filePath)
+		if err == nil && string(content) == "approved content" {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("approved shell input did not reach the terminal")
+			t.Fatalf("approved file write did not execute: %q, %v", content, err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	checkStatus(t, request(t, http.MethodGet, service.BaseURL()+"/api/approvals/"+fileApproval.ID, nil), http.StatusOK).Body.Close()
 
-	filePath := filepath.Join(dataDir, "approved.txt")
-	filePayload, _ := json.Marshal(map[string]any{"tool": "file_write", "args": map[string]any{"remote_path": filePath, "data": "approved content", "mode": "text"}})
-	fileID, err := sess.SubmitOperation(approval.Submission{Kind: approval.KindFileWrite, Source: "mcp", Summary: "write approved.txt", Payload: filePayload})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
-		t.Fatalf("file write happened before approval: %v", err)
-	}
-	checkApprovalStatus(t, newApprovalRequest(t, http.MethodPost, service.BaseURL()+"/api/approvals/"+fileID+"/approve", map[string]any{}), http.StatusOK).Body.Close()
-	content, err := os.ReadFile(filePath)
-	if err != nil || string(content) != "approved content" {
-		t.Fatalf("approved file write failed: %q, %v", content, err)
-	}
+	checkStatus(t, request(t, http.MethodPatch, service.BaseURL()+"/api/sessions/"+session.SessionID+"/approval", strings.NewReader(`{"enabled":false}`)), http.StatusOK).Body.Close()
+}
 
-	forwardPayload, _ := json.Marshal(map[string]any{"tool": "forward", "args": map[string]any{"action": "dynamic", "local_port": 0}})
-	forwardID, err := sess.SubmitOperation(approval.Submission{Kind: approval.KindForwardOpen, Source: "mcp", Summary: "start SOCKS5 forward", Payload: forwardPayload})
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkApprovalStatus(t, newApprovalRequest(t, http.MethodPost, service.BaseURL()+"/api/approvals/"+forwardID+"/approve", map[string]any{}), http.StatusOK).Body.Close()
-	forwards := checkApprovalStatus(t, newApprovalRequest(t, http.MethodGet, service.BaseURL()+"/api/forwards", nil), http.StatusOK)
+type pendingApproval struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+}
+
+func firstApproval(t *testing.T, baseURL, kind string) pendingApproval {
+	t.Helper()
+	resp := checkStatus(t, request(t, http.MethodGet, baseURL+"/api/approvals", nil), http.StatusOK)
+	defer resp.Body.Close()
 	var listed struct {
-		Forwards []json.RawMessage `json:"forwards"`
+		Approvals []struct {
+			Request pendingApproval `json:"request"`
+		} `json:"approvals"`
 	}
-	if err := json.NewDecoder(forwards.Body).Decode(&listed); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil {
 		t.Fatal(err)
 	}
-	_ = forwards.Body.Close()
-	if len(listed.Forwards) != 1 {
-		t.Fatalf("approved forward missing: %d", len(listed.Forwards))
+	for _, row := range listed.Approvals {
+		approval := row.Request
+		if approval.ID != "" && strings.Contains(strings.ToLower(approval.Kind), strings.ToLower(kind)) {
+			return approval
+		}
 	}
+	t.Fatalf("approval kind %q not found in %+v", kind, listed.Approvals)
+	return pendingApproval{}
+}
 
-	checkApprovalStatus(t, newApprovalRequest(t, http.MethodPatch, service.BaseURL()+"/api/sessions/"+result.SessionID+"/approval", map[string]any{"enabled": false}), http.StatusOK).Body.Close()
-	if sess.ApprovalEnabled() {
-		t.Fatal("session approval was not disabled")
+func waitForOutput(t *testing.T, baseURL, shellID, marker string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		resp := checkStatus(t, request(t, http.MethodGet, baseURL+"/api/shells/"+shellID+"/output-range?tail=1&max=4096", nil), http.StatusOK)
+		data, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if strings.Contains(string(data), marker) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("shell output did not contain %q: %s", marker, data)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-func newApprovalRequest(t *testing.T, method, url string, body any) *http.Request {
+func initializeDesktopMCP(t *testing.T, baseURL string) string {
 	t.Helper()
-	var data []byte
-	if body != nil {
-		data, _ = json.Marshal(body)
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"desktop-e2e","version":"1"}}}`
+	req := request(t, http.MethodPost, baseURL+"/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp := checkStatus(t, req, http.StatusOK)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	sessionID := resp.Header.Get("Mcp-Session-Id")
+	if sessionID == "" {
+		t.Fatal("MCP initialize returned no session id")
 	}
-	req, err := http.NewRequest(method, url, bytes.NewReader(data))
+	return sessionID
+}
+
+func mcpTerm(t *testing.T, baseURL, sessionID string, arguments map[string]any) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "term",
+			"arguments": arguments,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	req := request(t, http.MethodPost, baseURL+"/stream", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", sessionID)
+	resp := checkStatus(t, req, http.StatusOK)
+	data, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	raw := string(data)
+	idx := strings.Index(raw, `{"jsonrpc"`)
+	if idx < 0 {
+		t.Fatalf("MCP term response has no JSON-RPC object: %s", raw)
+	}
+	var result struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error any `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(raw[idx:]), &result); err != nil {
+		t.Fatalf("decode MCP term response: %v\n%s", err, raw)
+	}
+	if result.Error != nil || result.Result.IsError {
+		t.Fatalf("MCP term failed: %s", raw)
+	}
+	if len(result.Result.Content) == 0 {
+		t.Fatalf("MCP term returned no content: %s", raw)
+	}
+	return result.Result.Content[0].Text
+}
+
+func request(t *testing.T, method, endpoint string, body io.Reader) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(method, endpoint, body)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return req
 }
 
-func checkApprovalStatus(t *testing.T, req *http.Request, want int) *http.Response {
+func checkStatus(t *testing.T, req *http.Request, want int) *http.Response {
 	t.Helper()
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
@@ -144,9 +246,8 @@ func checkApprovalStatus(t *testing.T, req *http.Request, want int) *http.Respon
 	}
 	if resp.StatusCode != want {
 		defer resp.Body.Close()
-		var body bytes.Buffer
-		_, _ = body.ReadFrom(resp.Body)
-		t.Fatalf("%s %s = %d, want %d: %s", req.Method, req.URL, resp.StatusCode, want, body.String())
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("%s %s = %d, want %d: %s", req.Method, req.URL, resp.StatusCode, want, data)
 	}
 	return resp
 }

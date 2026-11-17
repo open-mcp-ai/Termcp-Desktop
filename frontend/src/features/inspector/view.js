@@ -3,20 +3,19 @@ import { activePane, shellByID, state } from '../../state.js';
 
 export function inspectorShell() {
   if (state.inspector.collapsed) {
-    return `<button class="inspector-expand" data-toggle-inspector title="Expand session tools">${icon('collapse', 16)}</button><nav class="inspector-rail" aria-label="Session tools"><button data-inspector-tab="files" class="${state.inspector.tab === 'files' ? 'active' : ''}" title="Files">${icon('folder', 16)}</button><button data-inspector-tab="forwards" class="${state.inspector.tab === 'forwards' ? 'active' : ''}" title="Forwards">${icon('forward', 16)}</button><button data-inspector-tab="notifications" class="${state.inspector.tab === 'notifications' ? 'active' : ''}" title="Notifications">${icon('bell', 16)}</button></nav>`;
+    return `<button class="inspector-expand" data-toggle-inspector title="Expand session tools">${icon('collapse', 16)}</button><nav class="inspector-rail" aria-label="Session tools"><button data-inspector-tab="files" class="${state.inspector.tab === 'files' ? 'active' : ''}" title="Files">${icon('folder', 16)}</button><button data-inspector-tab="forwards" class="${state.inspector.tab === 'forwards' ? 'active' : ''}" title="Forwards">${icon('forward', 16)}</button></nav>`;
   }
   const pane = activePane();
   const item = pane && shellByID(pane.shellID);
-  if (!item) return `<header class="inspector-empty-head"><div><span>Session tools</span><b>Files and forwards</b></div><div class="inspector-head-actions"><button data-toggle-inspector title="Collapse file manager">${icon('expand', 15)}</button></div></header><div class="inspector-empty">Select a terminal pane to manage files, forwards and notifications.</div>`;
-  const tabs = [['files', 'Files', 'folder'], ['forwards', 'Forwards', 'forward'], ['notifications', 'Notifications', 'bell']];
+  if (!item) return `<header class="inspector-empty-head"><div><span>Session tools</span><b>Files and forwards</b></div><div class="inspector-head-actions"><button data-toggle-inspector title="Collapse file manager">${icon('expand', 15)}</button></div></header><div class="inspector-empty">Select a terminal pane to manage files and forwards.</div>`;
+  const tabs = [['files', 'Files', 'folder'], ['forwards', 'Forwards', 'forward']];
   return `<header><div><span>Session tools</span><b>${esc(item.session.name)}</b></div><div class="inspector-head-actions"><code>${esc(item.name)}</code><button data-action="edit-tags" data-kind="shell" data-id="${esc(item.id)}" title="Edit shell tags" aria-label="Edit shell tags">${icon('edit', 14)}</button><button data-toggle-inspector title="Collapse file manager">${icon('expand', 15)}</button></div></header><nav>${tabs.map(([key, label, glyph]) => `<button data-inspector-tab="${key}" class="${state.inspector.tab === key ? 'active' : ''}">${icon(glyph, 13)}${label}</button>`).join('')}</nav><div class="inspector-body">${state.inspector.loading ? '<div class="inspector-empty">Loading…</div>' : inspectorBody(item.session)}</div>`;
 }
 
 export function inspectorBody(session) {
   if (state.inspector.error) return `<div class="inspector-error">${esc(state.inspector.error)}</div>`;
   if (state.inspector.tab === 'files') return fileInspector(session);
-  if (state.inspector.tab === 'forwards') return forwardInspector(session);
-  return notificationInspector(session);
+  return forwardInspector(session);
 }
 
 function fileInspector(session) {
@@ -31,11 +30,6 @@ function fileInspector(session) {
 function forwardInspector(session) {
   const forwards = state.inspector.data?.forwards || [];
   return `<div class="inspector-actions"><button data-action="new-forward">${icon('plus', 12)}New forward</button></div><div class="forward-list">${forwards.map(forward => `<article><div><b>${esc(forward.direction || forward.kind)}</b><small>${esc(formatForward(forward))}</small></div><button data-forward-delete="${esc(forward.forward_id || forward.id)}">${icon('trash', 12)}</button></article>`).join('') || '<div class="inspector-empty">This session has no port forwards.</div>'}</div><small class="inspector-foot">Sessions ${esc(session.name)} closes when the session ends</small>`;
-}
-
-function notificationInspector() {
-  const notifications = state.inspector.data?.notifications || [];
-  return `<div class="notification-list">${notifications.map(rule => `<article><div><b>${esc(rule.event || rule.kind || 'Notification rule')}</b><small>${esc(rule.shell_id || rule.session_id || '')}</small></div><button data-notification-delete="${esc(rule.rule_id || rule.id)}">${icon('trash', 12)}</button></article>`).join('') || '<div class="inspector-empty">No active notification rules. Rules are registered by MCP shell_notify.</div>'}</div>`;
 }
 
 function formatForward(forward) {

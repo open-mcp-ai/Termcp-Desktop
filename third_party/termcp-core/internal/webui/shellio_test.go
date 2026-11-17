@@ -1,0 +1,311 @@
+package webui
+
+import (
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/open-mcp-ai/termcp/internal/message"
+	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sshserver"
+	"github.com/open-mcp-ai/termcp/internal/storage"
+	"github.com/open-mcp-ai/termcp/pkg/api"
+)
+
+// staticDocPaths are the agent-facing documents published by the embedded
+// static server. They must be fetchable over plain HTTP (curl), which is the
+// no-MCP integration path.
+var staticDocPaths = []string{
+	"/api.md",
+}
+
+// TestStaticDocsServed verifies the embedded docs are reachable at their paths.
+func TestStaticDocsServed(t *testing.T) {
+	mux := http.NewServeMux()
+	(&Handler{}).Register(mux)
+
+	for _, p := range staticDocPaths {
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, p, nil))
+		if rr.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", p, rr.Code)
+			continue
+		}
+		if body := rr.Body.String(); len(body) < 200 {
+			t.Errorf("GET %s returned %d bytes, want a real document", p, len(body))
+		}
+		if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/markdown") {
+			t.Errorf("GET %s Content-Type = %q, want text/markdown", p, ct)
+		}
+	}
+}
+
+// TestMarkdownContentTypeIsPlatformIndependent pins the .md media type even when
+// the host's mime table has no .md entry (a bare Linux container serves
+// text/plain by sniffing, Windows text/markdown): markdownContentType must win
+// over whatever http.ServeContent would sniff.
+func TestMarkdownContentTypeIsPlatformIndependent(t *testing.T) {
+	// The inner handler mimics http.FileServer serving a file whose extension
+	// nobody agrees on: on a mime-table system (.bin → application/octet-stream
+	// in Debian's /etc/mime.types) ServeContent reports that; on a bare machine it
+	// sniffs text/plain. Either way the wrapper must win for /api.md and stay
+	// out of the way otherwise.
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "doc.bin", time.Time{}, strings.NewReader("# doc\n"))
+	})
+	h := markdownContentType(inner)
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api.md", nil))
+	if ct := rr.Header().Get("Content-Type"); ct != "text/markdown; charset=utf-8" {
+		t.Errorf("GET /api.md Content-Type = %q, want text/markdown; charset=utf-8", ct)
+	}
+
+	// Non-markdown assets keep whatever the inner handler decided — whatever
+	// that is on this host (text/plain sniffed, or octet-stream from a mime
+	// table), it must not be the wrapper's markdown type.
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/index.html", nil))
+	if ct := rr.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/markdown") {
+		t.Errorf("GET /index.html Content-Type = %q, want the wrapper to leave non-.md assets untouched", ct)
+	}
+}
+
+// TestShellIORoutes exercises the REST terminal-I/O endpoints against a live
+// internal session: input, named key, and resize.
+func TestShellIORoutes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts an SSH server")
+	}
+	srv := sshserver.New()
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	store := storage.New(dir)
+	msgMgr := message.NewManager(store)
+	sessMgr := session.NewManager(msgMgr, store, srv)
+	t.Cleanup(func() {
+		for _, s := range sessMgr.ListAll() {
+			_ = sessMgr.Delete(s.ID)
+		}
+		srv.Stop()
+	})
+
+	sess, err := sessMgr.Create(session.Config{
+		// Remote nil = the built-in loopback sshd (the "internal" profile).
+		Mode: api.ModePTY,
+		Rows: 24,
+		Cols: 80,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shellID := sess.PrimaryShellID()
+
+	h := &Handler{Sessions: sessMgr}
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := post("/api/shells/"+shellID+"/input", `{"text":"echo termcp-io-probe","press_enter":true}`); rr.Code != http.StatusOK {
+		t.Fatalf("input = %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr := post("/api/shells/"+shellID+"/key", `{"key":"enter"}`); rr.Code != http.StatusOK {
+		t.Fatalf("key = %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr := post("/api/shells/"+shellID+"/resize", `{"rows":40,"cols":120}`); rr.Code != http.StatusOK {
+		t.Fatalf("resize = %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// The echoed command must show up in the retained output. The login shell
+	// may take seconds to start (rc/profile), so the deadline is generous.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		out, _, err := sess.PrimaryShell().OutputByteRange(0, 1<<20)
+		if err == nil && strings.Contains(string(out), "termcp-io-probe") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("output never contained the probe: %q", string(out))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Error paths: unknown shell, bad JSON, missing key.
+	if rr := post("/api/shells/nope/input", `{"text":"x"}`); rr.Code != http.StatusNotFound {
+		t.Errorf("unknown shell = %d, want 404", rr.Code)
+	}
+	if rr := post("/api/shells/"+shellID+"/input", `{`); rr.Code != http.StatusBadRequest {
+		t.Errorf("bad JSON = %d, want 400", rr.Code)
+	}
+	if rr := post("/api/shells/"+shellID+"/key", `{}`); rr.Code != http.StatusBadRequest {
+		t.Errorf("missing key = %d, want 400", rr.Code)
+	}
+	if rr := post("/api/shells/"+shellID+"/resize", `{"rows":0,"cols":80}`); rr.Code != http.StatusBadRequest {
+		t.Errorf("zero rows = %d, want 400", rr.Code)
+	}
+}
+
+// TestApiPageShowsSkillDownload keeps the Web UI's API/MCP page pointing at the
+// skill download address: users should not have to assemble the URL by hand.
+func TestApiPageShowsTermEntrance(t *testing.T) {
+	b, err := readAsset("api.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`href="/api.md"`,           // the surviving document link
+		`/api/term`,                // the one REST entrance to the command space
+		`REST API is one endpoint`, // and the page says why no skill is served
+		`{"cmd":""}`,               // the guide call an agent learns from
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("api.html misses %s", want)
+		}
+	}
+	// The skill download is gone: it taught an HTTP flow the term entrance
+	// replaced, and a stale tutorial is worse than none.
+	for _, unwanted := range []string{`/SKILL.md`, `skills/termcp`, `id="url-skill"`} {
+		if strings.Contains(b, unwanted) {
+			t.Errorf("api.html still advertises %s", unwanted)
+		}
+	}
+}
+
+// TestApiPageShowsStdioConfig keeps the client-config page offering the stdio
+// bridge next to the two HTTP transports, with the address following the page.
+func TestApiPageShowsStdioConfig(t *testing.T) {
+	b, err := readAsset("api.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`id="cfg-stdio-cli"`,  // copy-ready claude mcp add command
+		`id="cfg-stdio-json"`, // copy-ready mcpServers JSON
+		`var stdioArgs = ['daemon', 'stdio'];`,
+		`'claude mcp add termcp -- termcp ' + stdioArgs.join(' ')`,
+		`location.hostname`, // the bridge address follows the browser origin
+		`location.port`,
+		`TERMCP_AUTH_TOKEN`, // credential travels via the environment
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("api.html misses %s", want)
+		}
+	}
+}
+
+// readAsset reads one embedded asset as text.
+func readAsset(p string) (string, error) {
+	b, err := fs.ReadFile(Assets(), p)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// readTerminalJS reads the terminal-view module family the way the browser
+// does: every file, in index.html load order, concatenated. The big module was
+// split by responsibility; a declaration that moved out of terminal-view.js is
+// still present (and still parsed) on the page, so assertions on the source of
+// the old single file must read the whole family.
+//
+// The order is read from index.html rather than repeated here. A second copy
+// would let a reorder that breaks the page at runtime (a template used before
+// the module that declares it is evaluated) keep passing these tests, because
+// the concatenation would still hold the old, working order.
+func readTerminalJS(t *testing.T) string {
+	t.Helper()
+	index, err := readAsset("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	found := 0
+	for _, m := range moduleScriptRe.FindAllStringSubmatch(index, -1) {
+		if !strings.Contains(m[1], "/terminal-") {
+			continue
+		}
+		sb.WriteString(readAssetLF(t, m[1]))
+		found++
+	}
+	if found == 0 {
+		t.Fatal("index.html loads no terminal-* modules; the family split was reverted?")
+	}
+	return sb.String()
+}
+
+// cssImportRe matches one @import line of the stylesheet manifest, capturing
+// the chunk file name. Shared so the CSS helpers and the override tests agree
+// on what a manifest entry looks like.
+var cssImportRe = regexp.MustCompile(`@import url\("([^"]+)"\)`)
+
+// readAppCSS reads the stylesheet the way the browser does: app.css is now a
+// manifest of @import chunks, so the effective CSS is the chunks in cascade
+// order. Assertions on styles must read the concatenation, or a rule that
+// moved into a chunk reads as missing.
+func readAppCSS(t *testing.T) string {
+	t.Helper()
+	manifest, err := readAsset("static/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	for _, line := range strings.Split(manifest, "\n") {
+		m := cssImportRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		sb.WriteString(readAssetLF(t, "static/css/"+m[1]))
+	}
+	return sb.String()
+}
+
+// readThemeCSS expands the chosen theme's manifest through the same file
+// fallback as the browser. Appearance tests name their theme explicitly.
+func readThemeCSS(t *testing.T, id string) string {
+	t.Helper()
+	prefix := "themes/" + id + "/assets/static/css/"
+	manifest := readAssetLF(t, prefix+"app.css")
+	var sb strings.Builder
+	for _, m := range cssImportRe.FindAllStringSubmatch(manifest, -1) {
+		sb.WriteString(readAssetLF(t, prefix+m[1]))
+	}
+	return sb.String()
+}
+
+// TestSyncedDocsMatchSource keeps the served copies of the repository docs in
+// sync with docs/. Line endings are normalized so a CRLF checkout does not
+// produce false failures; content drift still fails.
+func TestSyncedDocsMatchSource(t *testing.T) {
+	pairs := []struct{ src, asset string }{
+		{"../../docs/api.md", "api.md"},
+	}
+	for _, p := range pairs {
+		want, err := os.ReadFile(p.src)
+		if err != nil {
+			t.Skipf("source doc %s not available: %v", p.src, err)
+		}
+		got, err := fs.ReadFile(Assets(), p.asset)
+		if err != nil {
+			t.Fatalf("asset %s missing: %v (run `make sync-assets`)", p.asset, err)
+		}
+		if normalizeNL(string(want)) != normalizeNL(string(got)) {
+			t.Errorf("internal/webui/assets/%s is stale; run `make sync-assets`", p.asset)
+		}
+	}
+}
+
+func normalizeNL(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }

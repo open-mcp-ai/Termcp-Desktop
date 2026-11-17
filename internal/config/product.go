@@ -13,10 +13,10 @@ const (
 )
 
 // ProductVersion may be replaced at release build time with Go's -X linker flag.
-var ProductVersion = "0.1.2"
+var ProductVersion = "0.1.3"
 
-// CoreVersion is the bundled termcp Core release pinned in go.mod.
-var CoreVersion = "0.2.5"
+// CoreVersion is the bundled termcp Core release plus Desktop's local patch.
+var CoreVersion = "0.2.9+desktop.1"
 
 // DataDir returns the resolved termcp data directory for this process.
 func DataDir() string {

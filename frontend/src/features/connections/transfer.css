@@ -1,0 +1,110 @@
+.transfer-modal {
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+.transfer-modal > header { margin-bottom: 14px; }
+.transfer-modal > p { margin: 0 0 14px; }
+.transfer-select-all,
+.transfer-host {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  margin: 0 !important;
+  cursor: pointer;
+}
+.transfer-select-all {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text) !important;
+}
+.transfer-modal input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.transfer-host-list,
+.transfer-result-list {
+  max-height: min(310px, 42vh);
+  margin: 10px 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: auto;
+  background: var(--surface);
+}
+.transfer-host {
+  min-height: 48px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--line);
+}
+.transfer-host:last-child { border-bottom: 0; }
+.transfer-host:hover { background: var(--surface-2); }
+.transfer-host > span { min-width: 0; }
+.transfer-host b,
+.transfer-host small,
+.transfer-result-row b,
+.transfer-result-row small { display: block; }
+.transfer-host b,
+.transfer-result-row b { font-size: var(--font-small); color: var(--text); }
+.transfer-host small,
+.transfer-result-row small { margin-top: 4px; color: var(--muted); font-size: var(--font-tiny); overflow-wrap: anywhere; }
+.transfer-empty {
+  margin: 0 !important;
+  padding: 22px;
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--font-small);
+}
+.transfer-hint { color: var(--muted); font-size: var(--font-tiny) !important; }
+.transfer-result-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--accent);
+}
+.transfer-result-summary b,
+.transfer-result-summary small { display: block; }
+.transfer-result-summary b { color: var(--text); font-size: var(--font-base); }
+.transfer-result-summary small { margin-top: 4px; color: var(--muted); font-size: var(--font-tiny); }
+.transfer-result-list { max-height: min(420px, 55vh); margin: 12px 0 0; }
+.transfer-result-row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 12px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.transfer-result-row:last-child { border-bottom: 0; }
+.transfer-result-status {
+  width: max-content;
+  height: max-content;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font: 600 var(--font-tiny) ui-monospace, monospace;
+  text-transform: uppercase;
+}
+.transfer-result-status.status-imported { color: #25815a; background: color-mix(in srgb, #45b97c 12%, var(--surface)); }
+.transfer-result-status.status-renamed { color: var(--accent); background: var(--accent-soft); }
+.transfer-result-status.status-failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--surface)); }
+.transfer-host-error { color: var(--danger) !important; }
+.transfer-modal .modal-result { min-height: 16px; margin: 10px 0 0; }
+.transfer-modal > footer {
+  position: sticky;
+  bottom: -20px;
+  margin-top: 16px;
+  padding: 12px 0 20px;
+  background: var(--surface);
+}
+@media (max-width: 560px) {
+  .transfer-result-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}

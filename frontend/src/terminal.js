@@ -70,10 +70,16 @@ export class TerminalController {
           instance.term.write(`\r\n\x1b[33m[${t('Shell ended')}]\x1b[0m\r\n`);
         }
       }
-      if (message.type === 'sessions') this.hooks.sessions?.(message);
+      if (message.type === 'sessions') {
+        this.hooks.sessions?.(message);
+        this.hooks.extensions?.(message);
+      }
       if (message.type === 'ui_notify') this.hooks.notify?.(message);
       if (message.type === 'approval') this.hooks.approval?.(message);
-      if (message.type === 'shell_activity') this.activity.input(message);
+      if (message.type === 'shell_activity') {
+        this.hooks.activityEvent?.(message);
+        this.activity.input(message);
+      }
     };
     ws.onerror = () => { this.hooks.log?.('warn', 'Terminal WebSocket error', 'The event channel reported an error'); };
     ws.onclose = event => {

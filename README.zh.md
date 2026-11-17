@@ -56,7 +56,7 @@
 
 **Termcp Desktop** 是 [termcp](https://github.com/open-mcp-ai/termcp) 的桌面端：它将 Core 生命周期、SSH 资源管理和真实 PTY 终端放进一个跨平台原生窗口，让人类与 AI Agent 可以继续共享、观察和接管同一批会话。
 
-它不是 Electron 封装。桌面壳使用 [Wails v2](https://wails.io/docs/introduction/)，前端由系统 WebView 渲染；termcp Core 作为 Go 模块集成在同一应用中，GUI 与 Core 之间仍使用稳定的 REST / WebSocket 边界。
+它不是 Electron 封装。桌面壳使用 [Wails v2](https://wails.io/docs/introduction/)，前端由系统 WebView 渲染；termcp Core 作为 Go 模块集成在同一应用中，GUI 与 Core 之间仍使用稳定的 REST / WebSocket 边界。Core 统一使用 `no_webui` 构建：保留管理 API、MCP、WebSocket 与 `/api.md`，不嵌入也不提供上游 WebUI 的 HTML、JavaScript、CSS、主题和 xterm 资产。
 
 - **桌面用户** — 在资源管理器式界面中管理连接、会话、Shell、文件和转发。
 - **AI Agent** — 通过 termcp 的 MCP / Agent Skill 操作同一批真实终端。
@@ -73,11 +73,12 @@
 ## 核心能力
 
 - **真实终端工作台** — xterm 通过 `/api/ui/ws` 收发 PTY 字节流，支持 resize、滚动历史恢复与 output-range 补载。
-- **输入活动提示** — Shell 标签根据 Core v0.2.4 的活动事件区分人类正在输入和 AI 正在输入。
+- **输入活动提示** — Shell 标签根据 Core 的活动事件区分人类正在输入和 AI 正在输入。
 - **多会话与多窗格** — 工作区标签、最多四窗格、左右/上下/平铺布局、比例调整、窗格最大化和布局持久化。
 - **SSH 连接全生命周期** — 创建、编辑、测试和删除连接配置，并从配置直接创建会话与 Shell。
 - **文件与端口转发** — 本地/SFTP 文件浏览、上传、下载、重命名和目录管理；Local / Remote / Dynamic 转发集中配置。
-- **索引化对话历史** — 按输入与输出事件查看已结束会话，切换保留的 Shell，并导出终端原始日志。
+- **彩色对话历史** — 在只读终端中连续回放已结束会话，逐行用不同颜色标记人工输入、AI 输入与输出，切换保留的 Shell，并导出终端原始日志。
+- **运行时观测** — 汇总跨会话的 Agent／人工操作，跳转到对应只读终端位置，并查看已连接的 Web UI 与 MCP 客户端。
 - **资源标签** — 在桌面端为连接、会话和 Shell 添加标签，并按标签筛选资源。
 - **AI 操作审批** — 默认关闭；可设置全局默认值、单个连接覆盖值，并单独切换运行中会话。AI 发起的 Shell 输入、文件变更和端口转发启动进入审批列表；应用显示待审批提示，也可选择开启系统通知。
 - **Core 与系统服务管理** — 注册、卸载、启动、停止、重启和开机自启，关闭桌面窗口不会停止已注册的 Core。
@@ -85,7 +86,7 @@
 - **中英文界面** — 应用和托盘菜单均支持简体中文/英文即时切换。
 - **可观测且默认脱敏** — 桌面端、Core 服务、Wails 绑定与 REST 操作写入 JSON Lines 日志，不记录密码、私钥、令牌和请求正文。
 
-Core WebUI 规范接口的桌面端覆盖情况见 [API 覆盖表](docs/api-coverage.md)。
+Core 管理接口的桌面端覆盖情况见 [API 覆盖表](docs/api-coverage.md)。
 
 全局审批设置由桌面端保存，并同步为各 Core 连接配置的 `default_approval`。新建会话继承该值；修改默认设置不会改变已有会话。桌面端用户自己发起的操作不进入 AI 审批列表。系统通知通过 Wails 原生接口发送，需要操作系统支持及用户授权；待审批请求始终可在应用内查看。
 
@@ -108,7 +109,7 @@ Termcp Desktop 默认只在 `127.0.0.1:18765` 启动 Core，并将数据保存�
 
 ### 从源码运行
 
-需要 **Go 1.25.9+**、**Node.js** 和 **npm**。
+需要 **Go 1.27.3+**、**Node.js** 和 **npm**。
 
 ```bash
 git clone https://github.com/open-mcp-ai/Termcp-Desktop.git
@@ -154,7 +155,9 @@ npm run build
 
 macOS 构建结果位于 `build/bin/Termcp.app`。Windows 产出 `Termcp.exe`，Linux 产出原生可执行文件。发布构建应在各目标操作系统上分别执行，以使用对应的 WebView 与打包工具链。
 
-桌面端继续按独立的 `v0.1.x` 版本序列发布，新发布标签只包含桌面端版本（`vX.Y.Z`）。`go.mod` 锁定的 termcp Core 版本会写入 GitHub Release 说明，设置页同时显示桌面端和 Core 版本。每次发布都递增桌面端补丁版本，升级 Core 时也一样。用 `npm run release:version -- v0.1.2` 准备版本；脚本会读取 `go.mod` 中的 Core 版本并更新程序内显示的版本字段。`npm run check` 会校验这些字段，发布工作流会校验桌面端标签与源码版本一致。此前发布的 `v0.2.5+core.0.2.5` 安装包保留原版本，新一轮 `v0.1.x` 从 `v0.1.2` 开始。
+桌面端继续按独立的 `v0.1.x` 版本序列发布，新发布标签只包含桌面端版本（`vX.Y.Z`）。`go.mod` 锁定 Core 基线版本，GitHub Release 说明与设置页显示实际补丁版本。每次发布都递增桌面端补丁版本，升级 Core 时也一样。用 `npm run release:version -- v0.1.3` 准备版本；脚本会读取 `go.mod` 的 Core 基线版本，保留 `0.2.9+desktop.1` 这类明确补丁后缀，并更新程序内显示的版本字段。`npm run check` 会校验这些字段，发布工作流会校验桌面端标签与源码版本一致。
+
+当前 Core `v0.2.9` 使用 `third_party/termcp-core` 中的 Desktop 补丁 `0.2.9+desktop.1`。证据与发布步骤见 [Core 补丁说明](third_party/termcp-core/UPSTREAM.md) 和可审查的[补丁文件](third_party/patches/termcp-v0.2.9-desktop.1.patch)。发布前必须改为上游已发布的等价修复或独立发布的不可变补丁模块，并移除相对路径 replacement。
 
 ### 项目结构
 
@@ -165,6 +168,7 @@ internal/core/     进程内 Core 生命周期与服务入口
 internal/bridge/   受限 API 桥与原生上传/下载
 internal/logging/  结构化日志、轮转、脱敏与清理
 internal/tray/     macOS / Windows / Linux 系统托盘
+third_party/       Core 固定源码补丁与 no-WebUI 资产证据
 docs/              产品、架构、API 覆盖与验证记录
 prototype/         前期交互原型归档
 ```

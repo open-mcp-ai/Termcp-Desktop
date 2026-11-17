@@ -1,6 +1,28 @@
 # 更新日志
 
-本文件记录 Termcp Desktop 面向用户的变化。版本号与集成的 termcp Core 版本一致，发布版本以 Git 标签为准。
+本文件记录 Termcp Desktop 面向用户的变化。Desktop 使用独立的 `v0.1.x` 版本序列，并同时注明实际集成的 Core 版本；发布版本以 Git 标签为准。
+
+## 0.1.3 — 2026-11-16
+
+### Core 升级
+
+- 升级到 Core `v0.2.9` 基线，实际使用 `0.2.9+desktop.1` 审核补丁；`no_webui` 构建保留 REST、WebSocket、MCP/TERM、审批、通知、扩展和 `/api.md`，不嵌入或提供上游 WebUI 页面资产。
+- Desktop 统一通过公开 `core/config` 装配，显式使用 `127.0.0.1:18765` 与原数据目录；补齐 listener 所有权、真实版本/接口就绪检查、端口冲突、停止/重启和附着服务所有权边界。
+- 扩展支持旧 target 与新多主机 targets、typed holes、本地 values、预览、resident、`idle_timeout=0`、`termcp_tool` 和 URL native MCP peer；模板与安装值分开保存，导出不包含本地值。
+- URL peer 的旧 handle 在 URL、headers 或模板变化后失效；URL relay 和 `/ext/{name}/stream` 使用正确 pipe channel。
+- 远端默认目录复用 Core TERM getwd，本机继续使用用户 Home；Integration 页改用真实 `/api.md`/MCP 地址并支持导出薄 HTTP Skill。
+
+### 改进
+
+- 内嵌 Core 升级到 v0.2.8，提供 TERM/1、单一 `term` MCP 工具与 `POST /api/term`，并按新生命周期管理扩展协调器和连接者通知。
+- 新增 Runtime 观测页，集中查看跨会话 Agent／人工活动和当前连接的 Web UI、MCP 客户端；活动可跳转到对应只读终端位置。
+- 新增独立 Extensions 页面，实时展示模板、状态、失败原因、转发与重试时间；扩展内部 `ext*` 会话不再出现在普通资源树、历史或终端标签中。
+- 主机配置支持选择或全部导出，可选密码生成 `.enc` 文件，并可导入普通或加密批量配置；导入结果逐 Host 展示成功、重命名与失败。
+
+### 修复
+
+- 移除 Core v0.2.8 已退役的 Shell 通知规则面板和旧 `/api/notifications` 调用，保留审批所需的应用内与桌面系统通知。
+- 普通 Shell 关闭改用归档接口，关闭后的终端输出仍可从历史读取；会话和 Shell 详情显示 Core 返回的结束原因，不再仅凭 `204` 推断归档完成。
 
 ## 0.2.5 — 2026-10-02
 

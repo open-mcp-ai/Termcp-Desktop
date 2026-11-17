@@ -9,7 +9,7 @@ const goMod = await readFile(resolve(root, 'go.mod'), 'utf8');
 const coreMatch = /^\s*github\.com\/open-mcp-ai\/termcp v(\d+\.\d+\.\d+)\s*$/m.exec(goMod);
 
 if (!coreMatch) {
-  console.error('go.mod must pin a released termcp Core version.');
+  console.error('go.mod must pin a released termcp Core base version.');
   process.exit(1);
 }
 
@@ -28,11 +28,25 @@ const lock = JSON.parse(files.lock);
 const config = JSON.parse(files.wails);
 const productMatch = /var ProductVersion = "(\d+\.\d+\.\d+)"/.exec(files.product);
 if (!productMatch) throw new Error('internal/config/product.go must define ProductVersion.');
-const bundledCoreMatch = /var CoreVersion = "(\d+\.\d+\.\d+)"/.exec(files.product);
+const bundledCoreMatch = /var CoreVersion = "(\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?)"/.exec(files.product);
 if (!bundledCoreMatch) throw new Error('internal/config/product.go must define CoreVersion.');
 const frontendVersionMatch = /export const desktopVersion = '(\d+\.\d+\.\d+)'/.exec(files.frontendBuild);
-const frontendCoreMatch = /export const bundledCoreVersion = '(\d+\.\d+\.\d+)'/.exec(files.frontendBuild);
+const frontendCoreMatch = /export const bundledCoreVersion = '(\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?)'/.exec(files.frontendBuild);
 if (!frontendVersionMatch || !frontendCoreMatch) throw new Error('frontend/src/build-info.js must define both versions.');
+const coreBaseVersion = value => String(value || '').split(/[+-]/, 1)[0];
+const coreBaseMatch = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+if (!coreBaseMatch.test(coreMatch[1])) {
+  console.error(`go.mod Core base version is invalid: ${coreMatch[1]}`);
+  process.exit(1);
+}
+const patchedCore = bundledCoreMatch[1].includes('+') || frontendCoreMatch[1].includes('+');
+if (patchedCore && !/^replace github\.com\/open-mcp-ai\/termcp => \.\/third_party\/termcp-core$/m.test(goMod)) {
+  console.error('A patched Core version requires the checked-in ./third_party/termcp-core replacement.');
+  process.exit(1);
+}
+const targetCoreVersion = coreBaseVersion(bundledCoreMatch[1]) === coreMatch[1]
+  ? bundledCoreMatch[1]
+  : coreMatch[1];
 
 if ((!checkOnly || raw) && !match) {
   console.error(`Invalid release tag "${raw}". Expected vX.Y.Z.`);
@@ -52,8 +66,8 @@ if (checkOnly && match && version !== taggedVersion) {
 }
 
 if (checkOnly) {
-  if (bundledCoreMatch[1] !== coreMatch[1] || frontendCoreMatch[1] !== coreMatch[1]) {
-    console.error(`Bundled Core versions must match go.mod v${coreMatch[1]}: backend v${bundledCoreMatch[1]}, frontend v${frontendCoreMatch[1]}.`);
+  if (bundledCoreMatch[1] !== frontendCoreMatch[1] || coreBaseVersion(bundledCoreMatch[1]) !== coreMatch[1]) {
+    console.error(`Bundled Core versions must match go.mod base v${coreMatch[1]} and each other: backend v${bundledCoreMatch[1]}, frontend v${frontendCoreMatch[1]}.`);
     process.exit(1);
   }
   const actual = {
@@ -72,10 +86,10 @@ if (checkOnly) {
   }
   if (match) {
     console.log(`version=${version}`);
-    console.log(`core_version=${coreMatch[1]}`);
+    console.log(`core_version=${bundledCoreMatch[1]}`);
     console.log(`tag=${raw}`);
   } else {
-    console.log(`Desktop version fields match: v${version} (bundled Core v${coreMatch[1]}).`);
+    console.log(`Desktop version fields match: v${version} (bundled Core v${bundledCoreMatch[1]}).`);
   }
   process.exit(0);
 }
@@ -95,11 +109,11 @@ await Promise.all([
   writeFile(paths.frontend, `${JSON.stringify(frontend, null, 2)}\n`, 'utf8'),
   writeFile(paths.lock, `${JSON.stringify(lock, null, 2)}\n`, 'utf8'),
   writeFile(paths.wails, `${JSON.stringify(config, null, 2)}\n`, 'utf8'),
-  writeFile(paths.product, files.product.replace(productMatch[0], `var ProductVersion = "${version}"`).replace(bundledCoreMatch[0], `var CoreVersion = "${coreMatch[1]}"`), 'utf8'),
-  writeFile(paths.frontendBuild, files.frontendBuild.replace(frontendVersionMatch[0], `export const desktopVersion = '${version}'`).replace(frontendCoreMatch[0], `export const bundledCoreVersion = '${coreMatch[1]}'`), 'utf8'),
+  writeFile(paths.product, files.product.replace(productMatch[0], `var ProductVersion = "${version}"`).replace(bundledCoreMatch[0], `var CoreVersion = "${targetCoreVersion}"`), 'utf8'),
+  writeFile(paths.frontendBuild, files.frontendBuild.replace(frontendVersionMatch[0], `export const desktopVersion = '${version}'`).replace(frontendCoreMatch[0], `export const bundledCoreVersion = '${targetCoreVersion}'`), 'utf8'),
 ]);
 
 // The output format can be appended directly to GitHub Actions' GITHUB_OUTPUT.
 console.log(`version=${version}`);
-console.log(`core_version=${coreMatch[1]}`);
+console.log(`core_version=${targetCoreVersion}`);
 console.log(`tag=${raw}`);

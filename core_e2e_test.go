@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -14,6 +16,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	guiConfig "github.com/open-mcp-ai/termcp/gui/internal/config"
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
 	"github.com/open-mcp-ai/termcp/gui/internal/model"
@@ -34,6 +39,106 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = service.Stop() })
 	app := newApp(service)
+	mcpClient, err := client.NewStreamableHttpClient("http://127.0.0.1:"+strconv.Itoa(port)+"/stream", transport.WithContinuousListening())
+	if err != nil {
+		t.Fatalf("create MCP client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+	if err := mcpClient.Start(ctx); err != nil {
+		t.Fatalf("start MCP client: %v", err)
+	}
+	initRequest := mcpgo.InitializeRequest{}
+	initRequest.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
+	initRequest.Params.ClientInfo = mcpgo.Implementation{Name: "desktop-e2e", Version: "1"}
+	if _, err := mcpClient.Initialize(ctx, initRequest); err != nil {
+		t.Fatalf("initialize MCP client: %v", err)
+	}
+	tools, err := mcpClient.ListTools(ctx, mcpgo.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("list MCP tools: %v", err)
+	}
+	if len(tools.Tools) != 1 || tools.Tools[0].Name != "term" {
+		t.Fatalf("MCP tools = %+v, want only term", tools.Tools)
+	}
+	prompts, err := mcpClient.ListPrompts(ctx, mcpgo.ListPromptsRequest{})
+	if err != nil {
+		t.Fatalf("list MCP prompts: %v", err)
+	}
+	foundLearnAPI := false
+	for _, prompt := range prompts.Prompts {
+		if prompt.Name == "learn-api" {
+			foundLearnAPI = true
+		}
+	}
+	if !foundLearnAPI {
+		t.Fatalf("MCP prompts = %+v, want learn-api", prompts.Prompts)
+	}
+	call := mcpgo.CallToolRequest{}
+	call.Params.Name = "term"
+	call.Params.Arguments = map[string]any{"cmd": "ls", "structured_content": true}
+	callResult, err := mcpClient.CallTool(ctx, call)
+	if err != nil {
+		t.Fatalf("call MCP term: %v", err)
+	}
+	if callResult.IsError {
+		t.Fatalf("MCP term failed: %+v", callResult.Content)
+	}
+	structured, ok := callResult.StructuredContent.(map[string]any)
+	if !ok || structured["protocol"] != "TERM/1" || structured["code"] != float64(200) {
+		t.Fatalf("MCP structured TERM reply = %#v", callResult.StructuredContent)
+	}
+
+	concurrent := make(chan error, 2)
+	for _, command := range []string{"ls", "help"} {
+		command := command
+		go func() {
+			request := mcpgo.CallToolRequest{}
+			request.Params.Name = "term"
+			request.Params.Arguments = map[string]any{"cmd": command}
+			result, err := mcpClient.CallTool(ctx, request)
+			if err == nil && result.IsError {
+				err = fmt.Errorf("%s returned isError", command)
+			}
+			concurrent <- err
+		}()
+	}
+	for range 2 {
+		if err := <-concurrent; err != nil {
+			t.Fatalf("concurrent MCP call: %v", err)
+		}
+	}
+	t.Cleanup(func() { _ = mcpClient.Close() })
+	reconnected, err := client.NewStreamableHttpClient("http://127.0.0.1:"+strconv.Itoa(port)+"/stream", transport.WithContinuousListening())
+	if err != nil {
+		t.Fatalf("create reconnected MCP client: %v", err)
+	}
+	if err := reconnected.Start(ctx); err != nil {
+		t.Fatalf("start reconnected MCP client: %v", err)
+	}
+	if _, err := reconnected.Initialize(ctx, initRequest); err != nil {
+		t.Fatalf("reinitialize MCP client: %v", err)
+	}
+	if _, err := reconnected.CallTool(ctx, call); err != nil {
+		t.Fatalf("call after MCP reconnect: %v", err)
+	}
+	if err := reconnected.Close(); err != nil {
+		t.Fatalf("close reconnected MCP client: %v", err)
+	}
+
+	sseClient, err := client.NewSSEMCPClient("http://127.0.0.1:" + strconv.Itoa(port) + "/sse")
+	if err != nil {
+		t.Fatalf("create SSE MCP client: %v", err)
+	}
+	if err := sseClient.Start(ctx); err != nil {
+		t.Fatalf("start SSE MCP client: %v", err)
+	}
+	if _, err := sseClient.Initialize(ctx, initRequest); err != nil {
+		t.Fatalf("initialize SSE MCP client: %v", err)
+	}
+	if err := sseClient.Close(); err != nil {
+		t.Fatalf("close SSE MCP client: %v", err)
+	}
 	var version struct {
 		Version string `json:"version"`
 	}
@@ -52,6 +157,10 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 	}
 	if snapshot, err := app.GetSnapshot(); err != nil || snapshot.Core.Version != version.Version {
 		t.Fatalf("snapshot Core version = %q, error = %v", snapshot.Core.Version, err)
+	}
+	termGuide := assertAPIStatus(t, app, "POST", "/api/term", map[string]any{"cmd": ""}, http.StatusOK)
+	if strings.TrimSpace(termGuide.Body) == "" {
+		t.Fatal("POST /api/term returned an empty command guide")
 	}
 
 	assertAPIStatus(t, app, "GET", "/api/connections", nil, http.StatusOK)
@@ -125,6 +234,41 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 			t.Fatalf("shell activity event %d = %+v, want shell=%q src=api submit=%t", index, event, session.ShellID, submit)
 		}
 	}
+	activity, err := app.GetActivity(session.SessionID, 200)
+	if err != nil {
+		t.Fatalf("read observability activity: %v", err)
+	}
+	if len(activity) == 0 || activity[0].ShellID != session.ShellID {
+		t.Fatalf("observability activity = %+v", activity)
+	}
+	clients, err := app.GetClients()
+	if err != nil {
+		t.Fatalf("read observability clients: %v", err)
+	}
+	if len(clients.WebUI) == 0 {
+		t.Fatal("Core did not report the attached desktop WebSocket as a client")
+	}
+	notify := mcpgo.CallToolRequest{}
+	notify.Params.Name = "term"
+	notify.Params.Arguments = map[string]any{"cmd": "notify --title desktop-upgrade runtime notification"}
+	if result, err := mcpClient.CallTool(ctx, notify); err != nil || result.IsError {
+		t.Fatalf("notify_user directive failed: result=%+v err=%v", result, err)
+	}
+	for {
+		var event struct {
+			Type  string `json:"type"`
+			Title string `json:"title"`
+		}
+		if err := activitySocket.ReadJSON(&event); err != nil {
+			t.Fatalf("read UI notification: %v", err)
+		}
+		if event.Type == "ui_notify" {
+			if event.Title != "desktop-upgrade" {
+				t.Fatalf("UI notification title = %q", event.Title)
+			}
+			break
+		}
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		output := assertAPIStatus(t, app, "GET", "/api/shells/"+url.PathEscape(session.ShellID)+"/output-range?tail=1&max=4096", nil, http.StatusOK)
@@ -177,12 +321,14 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 		t.Fatalf("forward missing from snapshot: %+v, %v", withForward.Forwards, err)
 	}
 	assertAPIStatus(t, app, "DELETE", "/api/forwards/"+url.PathEscape(forwardInfo.ID), nil, http.StatusOK)
-	assertAPIStatus(t, app, "GET", "/api/notifications?session_id="+url.QueryEscape(session.SessionID), nil, http.StatusOK)
 
 	assertAPIStatus(t, app, "POST", "/api/sessions/"+url.PathEscape(session.SessionID)+"/terminate", nil, http.StatusNoContent)
 	snapshot, err := app.GetSnapshot()
 	if err != nil || len(snapshot.History) != 1 || snapshot.History[0].ID != session.SessionID {
 		t.Fatalf("terminated session missing from history: %+v, %v", snapshot.History, err)
+	}
+	if !strings.Contains(strings.ToLower(snapshot.History[0].ExitReason), "closed") {
+		t.Fatalf("terminated session has no preserved exit reason: %q", snapshot.History[0].ExitReason)
 	}
 	spans, err := app.GetConversationIndex(session.SessionID, session.ShellID)
 	if err != nil || len(spans) == 0 {
@@ -209,6 +355,36 @@ func TestIntegratedCoreResourceLifecycle(t *testing.T) {
 		t.Fatalf("streamed command generated %d input marks, want one submitted-line mark", inputMarks)
 	}
 	assertAPIStatus(t, app, "GET", "/api/shells/"+url.PathEscape(session.ShellID)+"/output-range?start=0&max=4096", nil, http.StatusOK)
+	// History colours use Core's terminal-row layout, including for archived
+	// shells. Width and screen height must survive the desktop API bridge.
+	for _, cols := range []int{80, 30} {
+		var rail struct {
+			Cols  int `json:"cols"`
+			Top   int `json:"top"`
+			Spans []*struct {
+				Start int64 `json:"start"`
+				End   int64 `json:"end"`
+			} `json:"spans"`
+			Marks []model.HistorySpan `json:"marks"`
+		}
+		path := "/api/shells/" + url.PathEscape(session.ShellID) + "/rail?cols=" + strconv.Itoa(cols) + "&height=24&top=0&count=48"
+		decodeResponse(t, assertAPIStatus(t, app, "GET", path, nil, http.StatusOK), &rail)
+		if rail.Cols != cols || rail.Top != 0 || len(rail.Spans) != 48 || len(rail.Marks) == 0 {
+			t.Fatalf("archived row layout at cols=%d: %+v", cols, rail)
+		}
+		found := false
+		for _, row := range rail.Spans {
+			if row != nil {
+				found = true
+				if row.Start < 0 || row.End <= row.Start {
+					t.Fatalf("invalid archived row byte range: %+v", row)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("archived transcript has no mapped rows")
+		}
+	}
 	assertAPIStatus(t, app, "DELETE", "/api/sessions/"+url.PathEscape(session.SessionID), nil, http.StatusNoContent)
 	assertAPIStatus(t, app, "DELETE", "/api/connections/integration", nil, http.StatusNoContent)
 }

@@ -2,6 +2,8 @@ import { esc, joinPath } from '../ui/render.js';
 import { state } from '../state.js';
 import { emptyConnectionProfile } from './connections/profile.js';
 import { connectionEditor } from './connections/editor.js';
+import { exportConnectionsBody, importConnectionsBody, importResultBody } from './connections/transfer.js';
+import { extensionEditorBody, extensionEditorFooter } from './extensions/view.js';
 import { tagsFor } from './resources/tags.js';
 
 export function modal() {
@@ -46,9 +48,29 @@ export function modal() {
     const options = state.data.sessions.flatMap(session => (session.shells || []).map(shell => `<option value="${esc(shell.id)}" data-session="${esc(session.id)}">${esc(session.name)} / ${esc(shell.name || 'shell')}</option>`)).join('');
     body = `<label>Shell<select name="shell" required>${options}</select></label>`;
     footer = `<button type="button" class="button" data-close>Cancel</button><button class="button primary" type="submit">Add</button>`;
+  } else if (dialog.type === 'extension') {
+    title = dialog.original ? `Edit ${dialog.original}` : 'New extension template'; eyebrow = 'CAPABILITY TEMPLATE';
+    body = extensionEditorBody(dialog);
+    footer = extensionEditorFooter(dialog);
+  } else if (dialog.type === 'export-connections') {
+    title = 'Export host configurations'; eyebrow = 'HOST BATCH EXPORT';
+    body = exportConnectionsBody();
+    footer = `<button type="button" class="button" data-close>Cancel</button><button class="button primary" type="submit">Choose file and export</button>`;
+  } else if (dialog.type === 'import-connections') {
+    title = 'Import host configurations'; eyebrow = 'HOST BATCH IMPORT';
+    body = importConnectionsBody();
+    footer = `<button type="button" class="button" data-close>Cancel</button><button class="button primary" type="submit">Choose file and import</button>`;
+  } else if (dialog.type === 'import-result') {
+    title = 'Host import result'; eyebrow = 'HOST BATCH IMPORT';
+    body = importResultBody(dialog.result);
+    footer = `<button type="button" class="button primary" data-close>Close</button>`;
   } else if (dialog.type === 'confirm') {
     title = dialog.title; eyebrow = 'CONFIRM'; body = `<p>${esc(dialog.message)}</p>`;
     footer = `<button type="button" class="button" data-close>Cancel</button><button type="button" class="button danger" data-confirm="${esc(dialog.action)}" data-payload="${esc(dialog.payload || '')}">${esc(dialog.confirm || 'Confirm')}</button>`;
   }
-  return `<div class="modal-backdrop"><form class="modal ${dialog.type === 'connection' ? 'wide connection-modal' : ''}" data-form="${esc(dialog.type)}" autocomplete="off" ${dialog.type === 'connection' ? 'novalidate' : ''}><header><div><span>${eyebrow}</span><h2>${esc(title)}</h2></div><button type="button" class="icon-btn" data-close>×</button></header>${body}<footer>${footer}</footer></form></div>`;
+  const modalClass = dialog.type === 'connection' ? 'wide connection-modal'
+    : dialog.type === 'extension' ? 'extension-editor-modal'
+      : ['export-connections', 'import-connections', 'import-result'].includes(dialog.type) ? 'wide transfer-modal'
+        : '';
+  return `<div class="modal-backdrop"><form class="modal ${modalClass}" data-form="${esc(dialog.type)}" autocomplete="off" ${dialog.type === 'connection' ? 'novalidate' : ''}><header><div><span>${eyebrow}</span><h2>${esc(title)}</h2></div><button type="button" class="icon-btn" data-close>×</button></header>${body}<footer>${footer}</footer></form></div>`;
 }
