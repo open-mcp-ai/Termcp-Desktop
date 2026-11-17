@@ -78,9 +78,10 @@ func TestIntegratedExtensionAuthoringLifecycle(t *testing.T) {
 		Extension extensionSummary `json:"extension"`
 	}
 	decodeResponse(t, created, &createdSummary)
-	if createdSummary.Extension.Name != "draft" || createdSummary.Extension.Status != "disabled" {
+	if createdSummary.Extension.Name != "draft" || createdSummary.Extension.Enabled {
 		t.Fatalf("created extension = %+v", createdSummary.Extension)
 	}
+	waitExtensionStatus(t, app, "draft", "disabled", 3*time.Second)
 
 	updated := assertAPIStatus(t, app, "PUT", "/api/extensions/draft", map[string]any{
 		"description": "patched",

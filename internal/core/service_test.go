@@ -148,7 +148,7 @@ func TestServicePortConflictDoesNotAttachOrLeak(t *testing.T) {
 	port := occupied.Addr().(*net.TCPAddr).Port
 	service := New("127.0.0.1", port)
 	err = service.Start()
-	if err == nil || !strings.Contains(err.Error(), "address already in use") {
+	if err == nil || !strings.Contains(err.Error(), "bind Core at") {
 		t.Fatalf("Start with an occupied port = %v", err)
 	}
 	status := service.Status()
