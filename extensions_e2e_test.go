@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	corepkg "github.com/open-mcp-ai/termcp/gui/internal/core"
 	"github.com/open-mcp-ai/termcp/gui/internal/model"
 )
@@ -329,8 +330,17 @@ help = "Path this installation may read"
 	}
 
 	preview := assertAPIStatus(t, app, "POST", "/api/extensions/values/preview", updatedTemplate, http.StatusOK, "application/toml; charset=utf-8")
-	if strings.Contains(preview.Body, "{{root}}") || strings.Contains(preview.Body, "[params.root]") || !strings.Contains(preview.Body, root) {
+	if strings.Contains(preview.Body, "{{root}}") || strings.Contains(preview.Body, "[params.root]") {
 		t.Fatalf("preview did not render with saved values: %s", preview.Body)
+	}
+	var rendered struct {
+		Paths []string `toml:"paths"`
+	}
+	if _, err := toml.Decode(preview.Body, &rendered); err != nil {
+		t.Fatalf("decode preview TOML: %v\n%s", err, preview.Body)
+	}
+	if len(rendered.Paths) != 1 || rendered.Paths[0] != root {
+		t.Fatalf("preview paths = %#v, want %q", rendered.Paths, root)
 	}
 
 	assertAPIErrorStatus(t, app, "PUT", "/api/extensions/values", `{"values":{"unknown":"x"}}`, http.StatusBadRequest, "application/json")
